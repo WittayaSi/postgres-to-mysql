@@ -8,6 +8,9 @@
 - ✅ **Manual Transfer**: Web UI สำหรับเลือกตาราง/ช่วงเวลา
 - ✅ **4-Layer Smart Classification Architecture**: จัดกลุ่มตารางอัตโนมัติ (Basic/OPD/IPD) **แบบไม่มีตารางซ้ำซ้อน (0% Overlaps)**
 - ✅ **Smart Change Detector**: เช็คการเปลี่ยนแปลงข้อมูลใน PostgreSQL ก่อนย้าย ข้ามตารางที่ไม่เปลี่ยนแปลงใน $0.0\text{s}$
+- ✅ **Adaptive Transfer Speed (ปรับความเร็วอัตโนมัติ)**: 
+  - **การโอนครั้งแรก (Initial Fast Mode)**: ตารางว่างใน MySQL จะโอนด้วยความเร็วสูงพิเศษ (`Batch Size = 2,000`, `Throttle = 20ms`) เพื่อให้โอนเสร็จไวขึ้น 5-10 เท่า
+  - **การโอนรอบถัดไป (Gentle Incremental Sync)**: โอนแบบทะนุถนอมเซิร์ฟเวอร์ (`Batch Size = 500`, `Throttle = 150ms`) เพื่อไม่กระทบผู้ใช้งานโรงพยาบาล
 - ✅ **Anti-Freeze & Performance Tuning**: 
   - ยกเลิกการใช้ `_last_sync` 100% ช่วยขจัดปัญหา Full Table Scan และแก้ปัญหา MySQL ค้าง
   - เพิ่ม **Batch Throttling (`TRANSFER_THROTTLE_MS = 150ms`)** เว้นจังหวะพัก ไม่แย่ง CPU/Disk I/O ของเซิร์ฟเวอร์

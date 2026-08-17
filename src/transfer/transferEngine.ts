@@ -614,7 +614,13 @@ class TransferEngine {
     options: { type: TransferType; dryRun: boolean; from: string | null; to: string | null; workerId: string; ipdDaysBack: number; ipdMinAn: string | null; source?: string }
   ): Promise<TableTransferResult> {
     const { type, dryRun, from, to, workerId, ipdMinAn, source } = options;
-    const batchSize = this.batchSize;
+    
+    // Adaptive Transfer Speed: Fast mode for initial transfer (empty MySQL table), gentle mode for incremental sync
+    const mysqlRowCount = await mysqlConnector.countRows(table.name).catch(() => 0);
+    const isInitialTransfer = mysqlRowCount === 0;
+    
+    const batchSize = isInitialTransfer ? Math.max(this.batchSize, 2000) : this.batchSize;
+    const currentThrottleMs = isInitialTransfer ? Math.min(this.throttleMs, 20) : this.throttleMs;
     
     // Helper to add log entry
     const MAX_LOGS = 200;
@@ -700,7 +706,7 @@ class TransferEngine {
             await mysqlConnector.insertBatch(table.name, rows);
           }
           // Throttle: give MySQL breathing room for other apps
-          if (this.throttleMs > 0) await delay(this.throttleMs);
+          if (currentThrottleMs > 0) await delay(currentThrottleMs);
         }
         
         transferredRows += rows.length;
@@ -754,7 +760,7 @@ class TransferEngine {
                 await mysqlConnector.insertBatch(table.name, rows);
               }
               // Throttle: give MySQL breathing room for other apps
-              if (this.throttleMs > 0) await delay(this.throttleMs);
+              if (currentThrottleMs > 0) await delay(currentThrottleMs);
             }
             
             transferredRows += rows.length;
@@ -785,7 +791,7 @@ class TransferEngine {
               await mysqlConnector.insertBatch(table.name, rows);
             }
             // Throttle: give MySQL breathing room for other apps
-            if (this.throttleMs > 0) await delay(this.throttleMs);
+            if (currentThrottleMs > 0) await delay(currentThrottleMs);
           }
           
           transferredRows += rows.length;
@@ -869,7 +875,7 @@ class TransferEngine {
                 await mysqlConnector.insertBatch(table.name, rows);
               }
               // Throttle: give MySQL breathing room for other apps
-              if (this.throttleMs > 0) await delay(this.throttleMs);
+              if (currentThrottleMs > 0) await delay(currentThrottleMs);
             }
             
             transferredRows += rows.length;
@@ -906,7 +912,7 @@ class TransferEngine {
               await mysqlConnector.insertBatch(table.name, rows);
             }
             // Throttle: give MySQL breathing room for other apps
-            if (this.throttleMs > 0) await delay(this.throttleMs);
+            if (currentThrottleMs > 0) await delay(currentThrottleMs);
           }
           
           transferredRows += rows.length;

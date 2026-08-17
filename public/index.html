@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Transfer - PostgreSQL to MySQL</title>
+  <meta name="description" content="ระบบถ่ายโอนข้อมูลอัตโนมัติจาก PostgreSQL ไปยัง MySQL พร้อม Web UI สำหรับจัดการ Transfer, Scheduler และ Real-time Monitoring">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔄</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/output.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div class="flex flex-col h-screen">
+    <!-- Header -->
+    <header class="header">
+      <div class="flex justify-between items-center flex-wrap gap-4">
+        <h1 class="header-title"><i data-lucide="database" class="inline-block w-6 h-6 mr-2"></i>Data Transfer PostgreSQL → MySQL</h1>
+        <div class="flex items-center gap-4">
+          <a href="/integrity" class="btn flex items-center gap-2" style="background: rgba(255,255,255,0.15); color: white; text-decoration: none;">
+            <i data-lucide="shield-check" class="w-4 h-4"></i> ตรวจสอบข้อมูล
+          </a>
+          <button id="btn-settings" class="btn btn-ghost flex items-center gap-2" style="background: rgba(255,255,255,0.15); color: white;">
+            <i data-lucide="settings" class="w-4 h-4"></i> ตั้งค่าระบบ (Settings)
+          </button>
+        </div>
+      </div>
+      <div class="flex gap-6 mt-2 text-sm" style="opacity: 0.9;">
+        <span id="pg-status" class="flex items-center gap-2">
+          <span class="status-dot status-dot-pending"></span>
+          Source: <span class="font-mono">--</span>
+        </span>
+        <span id="mysql-status" class="flex items-center gap-2">
+          <span class="status-dot status-dot-pending"></span>
+          Destination: <span class="font-mono">--</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-4" style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; min-height: 0;">
+      <!-- Left Panel - Tables -->
+      <div class="card" style="display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
+        <!-- Tabs -->
+        <div class="flex border-b mb-4">
+          <button class="tab-btn active" data-tab="basic"><i data-lucide="table-2" class="w-4 h-4 inline-block mr-1" style="vertical-align: -2px;"></i>Table ข้อมูลพื้นฐาน</button>
+          <button class="tab-btn" data-tab="opd"><i data-lucide="stethoscope" class="w-4 h-4 inline-block mr-1" style="vertical-align: -2px;"></i>Table ข้อมูลรักษา OPD</button>
+          <button class="tab-btn" data-tab="ipd"><i data-lucide="bed" class="w-4 h-4 inline-block mr-1" style="vertical-align: -2px;"></i>Table ข้อมูลรักษา IPD</button>
+        </div>
+
+        <!-- Filter Options -->
+        <div class="filter-section">
+          <div class="flex flex-wrap items-center gap-4">
+            <div id="batch-filter" class="flex items-center gap-2">
+              <label class="text-sm font-medium">ชุดที่:</label>
+              <select id="batch-select" class="input input-sm" style="width: auto;">
+                <option value="all">ทั้งหมด</option>
+              </select>
+              <span id="batch-range" class="text-xs text-muted"></span>
+            </div>
+            <div id="vn-filter" class="hidden flex items-center gap-2">
+              <label class="text-sm">เลข VN เริ่มต้น:</label>
+              <input type="text" id="vn-start" class="input input-sm" style="width: 6rem;" placeholder="6812">
+              <label class="text-sm">ถึง:</label>
+              <input type="text" id="vn-end" class="input input-sm" style="width: 6rem;" placeholder="6812">
+            </div>
+            <div id="an-filter" class="hidden flex items-center gap-2">
+              <label class="text-sm">เลข AN เริ่มต้น:</label>
+              <input type="text" id="an-start" class="input input-sm" style="width: 6rem;" placeholder="68">
+              <label class="text-sm">ถึง:</label>
+              <input type="text" id="an-end" class="input input-sm" style="width: 6rem;" placeholder="68">
+            </div>
+            <div class="flex items-center gap-2 ml-auto">
+              <button id="btn-check" class="btn btn-primary flex items-center gap-1" title="ตรวจสอบจำนวนข้อมูลในตารางที่เลือก"><i data-lucide="check-square" class="w-4 h-4"></i> Check</button>
+              <button id="btn-transfer" class="btn btn-success flex items-center gap-1" title="เริ่มโอนข้อมูลตารางที่เลือก" disabled><i data-lucide="play" class="w-4 h-4"></i> Start</button>
+              <button id="btn-refresh" class="btn btn-ghost flex items-center gap-1" title="โหลดรายการตารางใหม่"><i data-lucide="refresh-cw" class="w-4 h-4"></i> Refresh</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-2 px-2">
+          <div style="position: relative;">
+            <i data-lucide="search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: #94a3b8;"></i>
+            <input type="text" id="table-search" class="input" style="padding-left: 2.5rem;" placeholder="ค้นหาตาราง... (พิมพ์ชื่อตาราง)" oninput="filterTables(this.value)">
+          </div>
+        </div>
+
+        <!-- Select All -->
+        <div class="flex items-center justify-between mb-2 px-2">
+          <label class="checkbox-wrapper">
+            <input type="checkbox" id="select-all" class="checkbox">
+            <span class="text-sm">เลือกตารางทั้งหมด</span>
+          </label>
+          <span id="table-count" class="text-sm text-muted">0 ตาราง</span>
+        </div>
+
+        <!-- Table Header -->
+        <div class="table-grid table-header rounded-t" style="flex-shrink: 0;">
+          <span>ลำดับ</span>
+          <span>เลือก</span>
+          <span>table_name</span>
+          <span>status</span>
+          <span style="text-align: right;">จำนวนข้อมูล</span>
+        </div>
+
+        <!-- Table List -->
+        <div id="table-list" class="overflow-y-auto border rounded-b" style="flex: 1; min-height: 100px;">
+          <p class="text-center text-muted p-4">Loading tables...</p>
+        </div>
+
+        <!-- Table Footer -->
+        <div class="flex items-center justify-between mt-2 text-sm text-secondary" style="flex-shrink: 0;">
+          <span id="selected-count">0 ตารางที่เลือก</span>
+        </div>
+
+        <!-- Progress Section -->
+        <div id="progress-section" class="mt-4 pt-4 border-t hidden" style="flex-shrink: 0;">
+          <div class="flex justify-between text-sm mb-2">
+            <span class="font-medium">กำลังโอนข้อมูล:</span>
+            <span id="progress-table" class="text-muted">--</span>
+          </div>
+          <div class="progress-bar" style="height: 0.75rem;">
+            <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+          </div>
+          <div class="flex justify-between text-xs text-muted mt-2">
+            <span>เริ่ม: <span id="start-time">--</span></span>
+            <span>สิ้นสุด: <span id="end-time">--</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Panel - Logs & History -->
+      <div class="card" style="display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
+        <!-- Right Panel Tabs -->
+        <div class="flex border-b mb-2" style="flex-shrink: 0;">
+          <button class="right-tab-btn active" data-right-tab="logs" onclick="switchRightTab('logs')">
+            <i data-lucide="scroll-text" class="w-4 h-4 inline-block mr-1" style="vertical-align: -2px;"></i>Log
+            <span class="badge badge-neutral text-xs ml-1">Real-time</span>
+          </button>
+          <button class="right-tab-btn" data-right-tab="history" onclick="switchRightTab('history')">
+            <i data-lucide="history" class="w-4 h-4 inline-block mr-1" style="vertical-align: -2px;"></i>ประวัติการโอน
+          </button>
+        </div>
+
+        <!-- Logs Tab Content -->
+        <div id="right-tab-logs" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column;">
+          <!-- Log Filters -->
+          <div class="flex items-center justify-between mb-2 text-xs" style="flex-shrink: 0; padding: 0 0.25rem;">
+            <div class="flex gap-2">
+              <button id="btn-filter-all" class="badge badge-neutral cursor-pointer hover:bg-slate-200" onclick="setLogFilter('all')">ทั้งหมด</button>
+              <button id="btn-filter-error" class="badge cursor-pointer hover:bg-red-100 text-slate-500" onclick="setLogFilter('error')" style="background:transparent; border:1px solid #fecaca;">Error เท่านั้น</button>
+              <button id="btn-filter-success" class="badge cursor-pointer hover:bg-green-100 text-slate-500" onclick="setLogFilter('success')" style="background:transparent; border:1px solid #bbf7d0;">สำเร็จ</button>
+              <button id="btn-filter-progress" class="badge cursor-pointer hover:bg-blue-100 text-slate-500" onclick="setLogFilter('progress')" style="background:transparent; border:1px solid #bfdbfe;">กำลังทำ</button>
+            </div>
+            <button class="text-secondary hover:text-slate-700 flex items-center gap-1" onclick="clearLogs()">
+              <i data-lucide="trash-2" class="w-3 h-3"></i> ล้าง
+            </button>
+          </div>
+          
+          <div id="logs-container" class="log-container" style="flex: 1; max-height: none; overflow-y: auto;">
+            <div class="empty-state">
+              <div class="empty-state-icon">📋</div>
+              <div class="empty-state-text">รอรับ log จากระบบ...</div>
+              <div style="font-size: 0.75rem; color: #94a3b8;">เริ่ม transfer เพื่อดู log แบบ real-time</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- History Tab Content -->
+        <div id="right-tab-history" class="hidden" style="flex: 1; overflow-y: auto;">
+          <!-- Stats Cards -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem;">
+            <div style="background: #f0fdf4; border-radius: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid #bbf7d0;">
+              <div class="text-xs text-secondary">วันนี้สำเร็จ</div>
+              <div id="stat-success" class="font-semibold" style="color: #16a34a; font-size: 1.25rem;">0</div>
+            </div>
+            <div style="background: #fef2f2; border-radius: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid #fecaca;">
+              <div class="text-xs text-secondary">วันนี้ล้มเหลว</div>
+              <div id="stat-failed" class="font-semibold" style="color: #dc2626; font-size: 1.25rem;">0</div>
+            </div>
+            <div style="background: #eff6ff; border-radius: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid #bfdbfe;">
+              <div class="text-xs text-secondary">วันนี้โอนทั้งหมด</div>
+              <div id="stat-transfers" class="font-semibold" style="color: #2563eb; font-size: 1.25rem;">0</div>
+            </div>
+            <div style="background: #faf5ff; border-radius: 0.5rem; padding: 0.5rem 0.75rem; border: 1px solid #e9d5ff;">
+              <div class="text-xs text-secondary">จำนวน Rows</div>
+              <div id="stat-rows" class="font-semibold" style="color: #7c3aed; font-size: 1.25rem;">0</div>
+            </div>
+          </div>
+
+          <!-- History List -->
+          <div id="history-list" style="font-size: 0.8rem;">
+            <p class="text-muted text-center" style="padding: 1rem;">ยังไม่มีประวัติ</p>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span class="text-secondary flex items-center gap-1"><i data-lucide="clock" class="w-4 h-4"></i> Scheduler:</span>
+      <span id="scheduler-basic-status" class="sched-badge">Basic: --</span>
+      <span id="scheduler-opd-status" class="sched-badge">OPD: --</span>
+      <span id="scheduler-ipd-status" class="sched-badge">IPD: --</span>
+      <button id="btn-scheduler" class="btn btn-ghost text-sm ml-auto flex items-center gap-1" title="เปิดหน้าตั้งค่าระบบเพื่อจัดการ Scheduler"><i data-lucide="settings" class="w-4 h-4"></i> ตั้งค่า Scheduler</button>
+    </footer>
+  </div>
+
+  <!-- Unified System Settings Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width: 60rem; height: 85vh; display: flex; flex-direction: column;">
+      <div class="modal-header shrink-0">
+        <div class="flex justify-between items-center">
+          <h2 class="font-semibold flex items-center gap-2"><i data-lucide="settings" class="w-5 h-5"></i> ตั้งค่าระบบ (System Settings)</h2>
+          <button id="settings-modal-close" style="font-size: 1.5rem; background: none; border: none; color: white; cursor: pointer;">&times;</button>
+        </div>
+      </div>
+      
+      <div class="modal-body flex-1 overflow-hidden p-0" style="display: flex;">
+        <!-- Settings Sidebar -->
+        <div class="w-64 border-r border-slate-200 bg-slate-50 overflow-y-auto">
+          <div class="p-3">
+            <button class="settings-tab-btn active flex items-center gap-2 w-full text-left p-3 rounded text-sm font-medium hover:bg-slate-200 transition-colors" data-tab="db">
+              <i data-lucide="database" class="w-4 h-4"></i> การเชื่อมต่อฐานข้อมูล
+            </button>
+            <button class="settings-tab-btn mt-1 flex items-center gap-2 w-full text-left p-3 rounded text-sm font-medium hover:bg-slate-200 transition-colors text-slate-600" data-tab="scheduler">
+              <i data-lucide="clock" class="w-4 h-4"></i> ตั้งค่าเวลา (Scheduler)
+            </button>
+            <button class="settings-tab-btn mt-1 flex items-center gap-2 w-full text-left p-3 rounded text-sm font-medium hover:bg-slate-200 transition-colors text-slate-600" data-tab="advanced" disabled title="Coming soon">
+              <i data-lucide="sliders" class="w-4 h-4"></i> การตั้งค่าขั้นสูง
+            </button>
+            <button class="settings-tab-btn mt-1 flex items-center gap-2 w-full text-left p-3 rounded text-sm font-medium hover:bg-slate-200 transition-colors text-slate-600" data-tab="notify">
+              <i data-lucide="send" class="w-4 h-4"></i> แจ้งเตือน (Telegram)
+            </button>
+          </div>
+        </div>
+
+        <!-- Settings Content Area -->
+        <div class="flex-1 overflow-y-auto w-full">
+          
+          <!-- Database Tab -->
+          <div id="settings-tab-db" class="settings-pane p-6 block">
+            <h3 class="text-lg font-semibold mb-4 border-b pb-2">การตั้งค่าฐานข้อมูล (Database Connection)</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+              <!-- PostgreSQL Config -->
+              <div class="db-section">
+                <h4 class="db-title-postgres flex items-center gap-2 mb-3 font-semibold p-2"><i data-lucide="database" class="w-4 h-4"></i> PostgreSQL (Source)</h4>
+                <div class="space-y-4">
+                  <div style="display: grid; grid-template-columns: 1fr 80px; gap: 0.5rem;">
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Host:</label>
+                      <input type="text" id="pg-host" class="input input-sm">
+                    </div>
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Port:</label>
+                      <input type="number" id="pg-port" class="input input-sm" value="5432">
+                    </div>
+                  </div>
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">Database:</label>
+                    <input type="text" id="pg-database" class="input input-sm">
+                  </div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">User:</label>
+                      <input type="text" id="pg-user" class="input input-sm">
+                    </div>
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Password:</label>
+                      <div class="input-group">
+                        <input type="password" id="pg-password" class="input input-sm">
+                        <button type="button" class="input-addon" onclick="togglePassword('pg-password', this)">
+                          <svg class="icon-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                          <svg class="icon-eye-off hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+                    <button id="btn-test-pg" class="btn btn-ghost text-xs flex items-center gap-1 border border-slate-200" style="padding: 0.25rem 0.5rem;"><i data-lucide="plug" class="w-3 h-3"></i> Test Connection</button>
+                    <span id="pg-test-result" class="text-xs"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- MySQL Config -->
+              <div class="db-section">
+                <h4 class="db-title-mysql flex items-center gap-2 mb-3 font-semibold p-2"><i data-lucide="cylinder" class="w-4 h-4"></i> MySQL (Destination)</h4>
+                <div class="space-y-4">
+                  <div style="display: grid; grid-template-columns: 1fr 80px; gap: 0.5rem;">
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Host:</label>
+                      <input type="text" id="mysql-host" class="input input-sm">
+                    </div>
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Port:</label>
+                      <input type="number" id="mysql-port" class="input input-sm" value="3306">
+                    </div>
+                  </div>
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">Database:</label>
+                    <input type="text" id="mysql-database" class="input input-sm">
+                  </div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">User:</label>
+                      <input type="text" id="mysql-user" class="input input-sm">
+                    </div>
+                    <div>
+                      <label class="text-xs text-secondary font-medium block mb-1">Password:</label>
+                      <div class="input-group">
+                        <input type="password" id="mysql-password" class="input input-sm">
+                        <button type="button" class="input-addon" onclick="togglePassword('mysql-password', this)">
+                          <svg class="icon-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                          <svg class="icon-eye-off hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+                    <button id="btn-test-mysql" class="btn btn-ghost text-xs flex items-center gap-1 border border-slate-200" style="padding: 0.25rem 0.5rem;"><i data-lucide="plug" class="w-3 h-3"></i> Test Connection</button>
+                    <span id="mysql-test-result" class="text-xs"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+              <button id="btn-save-db-config" class="btn btn-primary text-sm flex items-center gap-1"><i data-lucide="save" class="w-4 h-4"></i> บันทึกการเชื่อมต่อฐานข้อมูล</button>
+            </div>
+          </div>
+
+          <!-- Scheduler Tab -->
+          <div id="settings-tab-scheduler" class="settings-pane p-6 hidden">
+            <h3 class="text-lg font-semibold mb-4 border-b pb-2">การตั้งเวลาโอนข้อมูล (Task Scheduler)</h3>
+            <div class="space-y-4">
+              <!-- Basic Schedule -->
+              <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                <h4 class="font-semibold mb-3 flex items-center gap-2">
+                  <i data-lucide="table" class="w-4 h-4"></i> ข้อมูลพื้นฐาน (Basic)
+                  <label class="checkbox-wrapper ml-auto">
+                    <input type="checkbox" id="sched-basic-enabled" class="checkbox" checked>
+                    <span class="text-sm">เปิดใช้งาน</span>
+                  </label>
+                </h4>
+                <div class="grid grid-cols-2 gap-4 max-w-lg">
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">รันวันละครั้ง ทุก:</label>
+                    <select id="sched-basic-type" class="input input-sm w-full bg-white">
+                      <option value="daily">ทุกวัน (Daily)</option>
+                      <option value="weekly">ทุกสัปดาห์ (Weekly)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">เวลา (HH:MM):</label>
+                    <input type="time" id="sched-basic-time" class="input input-sm w-full bg-white" value="02:00">
+                  </div>
+                  <div id="sched-basic-day-wrapper" class="hidden">
+                    <label class="text-xs text-secondary font-medium block mb-1">วันในสัปดาห์:</label>
+                    <select id="sched-basic-day" class="input input-sm w-full bg-white">
+                      <option value="0">อาทิตย์ (Sunday)</option>
+                      <option value="1">จันทร์ (Monday)</option>
+                      <option value="2">อังคาร (Tuesday)</option>
+                      <option value="3">พุธ (Wednesday)</option>
+                      <option value="4">พฤหัสบดี (Thursday)</option>
+                      <option value="5">ศุกร์ (Friday)</option>
+                      <option value="6">เสาร์ (Saturday)</option>
+                    </select>
+                  </div>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">คำอธิบาย: จะทำการดึงข้อมูลพื้้นฐานทั้งหมด ลบสร้างใหม่เพื่ออัปเดต โดยทำงานอัตโนมัติตามเวลาที่กำหนดช่วงที่การใช้งานระบบหลักน้อยที่สุด</p>
+              </div>
+
+              <!-- OPD Schedule -->
+              <div class="p-4 bg-blue-50 border border-blue-100 rounded-lg">
+                <h4 class="font-semibold mb-3 flex items-center gap-2">
+                  <i data-lucide="hospital" class="w-4 h-4"></i> ข้อมูลรักษา OPD
+                  <label class="checkbox-wrapper ml-auto">
+                    <input type="checkbox" id="sched-opd-enabled" class="checkbox" checked>
+                    <span class="text-sm">เปิดใช้งาน</span>
+                  </label>
+                </h4>
+                <div class="grid grid-cols-2 gap-4 max-w-lg">
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">ความถี่ (รันทุกๆ):</label>
+                    <input type="number" id="sched-opd-interval" class="input input-sm w-full bg-white" value="30" min="1">
+                  </div>
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">หน่วยเวลา:</label>
+                    <select id="sched-opd-unit" class="input input-sm w-full bg-white">
+                      <option value="minutes">นาที (Minutes)</option>
+                      <option value="hours">ชั่วโมง (Hours)</option>
+                    </select>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="text-xs text-secondary font-medium block mb-1">ตั้งค่าย้อนหลัง VN (วันรับบริการ OPD):</label>
+                    <div class="flex items-center gap-2">
+                      <input type="number" id="sched-opd-days" class="input input-sm bg-white" style="width: 100px;" value="7" min="1">
+                      <span class="text-sm text-slate-600">วัน</span>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">คำอธิบาย: ระบบจะดึงตารางที่มี <code>vn</code> โดยดึงข้อมูล VN ย้อนหลังตามจำนวนวันที่กำหนด ร่วมกับระบบ Smart Sync เพื่ออัปเดตข้อมูลที่มีการแก้ไขย้อนหลัง (Incremental sync)</p>
+              </div>
+
+              <!-- IPD Schedule -->
+              <div class="p-4 bg-green-50 border border-green-100 rounded-lg">
+                <h4 class="font-semibold mb-3 flex items-center gap-2">
+                  <i data-lucide="bed-double" class="w-4 h-4"></i> ข้อมูลรักษา IPD
+                  <label class="checkbox-wrapper ml-auto">
+                    <input type="checkbox" id="sched-ipd-enabled" class="checkbox" checked>
+                    <span class="text-sm">เปิดใช้งาน</span>
+                  </label>
+                </h4>
+                <div class="grid grid-cols-2 gap-4 max-w-lg">
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">ความถี่ (รันทุกๆ):</label>
+                    <input type="number" id="sched-ipd-interval" class="input input-sm w-full bg-white" value="30" min="1">
+                  </div>
+                  <div>
+                    <label class="text-xs text-secondary font-medium block mb-1">หน่วยเวลา:</label>
+                    <select id="sched-ipd-unit" class="input input-sm w-full bg-white">
+                      <option value="minutes">นาที (Minutes)</option>
+                      <option value="hours">ชั่วโมง (Hours)</option>
+                    </select>
+                  </div>
+                  <div class="col-span-2">
+                    <label class="text-xs text-secondary font-medium block mb-1">ตั้งค่าย้อนหลัง dchdate (วันกลับบ้าน):</label>
+                    <div class="flex items-center gap-2">
+                      <input type="number" id="sched-ipd-days" class="input input-sm bg-white" style="width: 100px;" value="45" min="1">
+                      <span class="text-sm text-slate-600">วัน</span>
+                    </div>
+                  </div>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">คำอธิบาย: ระบบจะตรวจสอบ `an_stat` ดึงรายการที่ `dchdate` ย้อนหลังตามจำนวนวันที่กำหนด เพื่อหาค่า AN ที่ต่ำที่สุดและนำตัวเลขนั้นมาใช้ดึงตาราง IPD อื่นๆ เป็นการอัปเดตข้อมูลผู้ป่วยใน (Incremental sync)</p>
+              </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+              <button id="btn-save-scheduler-config" class="btn btn-primary text-sm flex items-center gap-1"><i data-lucide="save" class="w-4 h-4"></i> บันทึกการตั้งเวลา</button>
+            </div>
+          </div>
+
+          <!-- Notification Tab -->
+          <div id="settings-tab-notify" class="settings-pane p-6 hidden">
+            <h3 class="text-lg font-semibold mb-4 border-b pb-2">การตั้งค่าแจ้งเตือน (Telegram Bot)</h3>
+            <div class="space-y-4">
+              <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg max-w-xl">
+                <div class="flex items-center gap-3 mb-4">
+                  <div class="w-10 h-10 rounded-full bg-[#2AABEE] flex items-center justify-center text-white font-bold text-xl"><i data-lucide="send" class="w-5 h-5"></i></div>
+                  <div>
+                    <h4 class="font-semibold text-slate-800">ส่งข้อความผ่าน Telegram Bot</h4>
+                    <p class="text-xs text-slate-500">รับรู้สถานะการทำงานแบบทันท่วงทีผ่านมือถือ</p>
+                  </div>
+                  <label class="checkbox-wrapper ml-auto">
+                    <input type="checkbox" id="telegram-enabled" class="checkbox">
+                    <span class="text-sm font-medium">เปิดใช้งาน</span>
+                  </label>
+                </div>
+                
+                <div class="space-y-3">
+                  <div>
+                    <label class="text-sm font-medium block mb-1">Bot Token:</label>
+                    <input type="password" id="telegram-bot-token" class="input w-full bg-white text-sm" placeholder="e.g., 123456789:ABCdefGHIjklMNOpqrSTUvwxYZ">
+                    <p class="text-xs text-slate-500 mt-1">ได้รับจาก @BotFather ใน Telegram</p>
+                  </div>
+                  <div>
+                    <label class="text-sm font-medium block mb-1">Chat ID:</label>
+                    <input type="text" id="telegram-chat-id" class="input w-full bg-white text-sm" placeholder="e.g., -1001234567890 หรือ 123456789">
+                    <p class="text-xs text-slate-500 mt-1">ID ของแชทส่วนตัว หรือ Group ID (เริ่มต้นด้วย -)</p>
+                  </div>
+                  
+                  <div class="pt-2 border-t border-slate-200 mt-4 flex items-center justify-between">
+                    <button id="btn-test-telegram" class="btn btn-ghost text-xs flex items-center gap-1 border border-slate-200"><i data-lucide="plug" class="w-3 h-3"></i> ทดสอบการส่งข้อความ</button>
+                    <span id="telegram-test-result" class="text-xs ml-2"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mt-6 flex justify-end">
+              <button id="btn-save-telegram" class="btn btn-primary text-sm flex items-center gap-1"><i data-lucide="save" class="w-4 h-4"></i> บันทึกการตั้งค่าแจ้งเตือน</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Dialog -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Confirmation Dialog -->
+  <div id="confirm-dialog" class="confirm-overlay hidden">
+    <div class="confirm-dialog">
+      <div class="confirm-icon confirm-icon-warning">⚠️</div>
+      <div id="confirm-title" class="confirm-title">ยืนยันการทำงาน</div>
+      <div id="confirm-message" class="confirm-message">คุณต้องการดำเนินการนี้หรือไม่?</div>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="btn btn-ghost">ยกเลิก</button>
+        <button id="confirm-ok" class="btn btn-success">ยืนยัน</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+  </script>
+</body>
+</html>

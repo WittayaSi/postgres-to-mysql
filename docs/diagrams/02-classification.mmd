@@ -1,0 +1,34 @@
+flowchart TD
+    A["Start Classification"] --> B["Fetch all Tables\nfrom PostgreSQL"]
+    B --> C["Loop each Table"]
+    C --> D["Get Table Columns"]
+    D --> E{"Has column\n'vn'?"}
+    E -->|Yes| F{"Has column\n'an'?"}
+    E -->|No| G{"Has column\n'an'?"}
+
+    F -->|Yes| H["Add to OPD + IPD\n(both groups)"]
+    F -->|No| I["Add to OPD"]
+
+    G -->|Yes| J["Add to IPD"]
+    G -->|No| K["Add to Basic"]
+
+    H --> L{"Matches\ninclude/exclude?"}
+    I --> L
+    J --> L
+    K --> L
+
+    L -->|No| M["Skip Table"]
+    L -->|Yes| N["Save to Group"]
+
+    M --> O{"More Tables?"}
+    N --> O
+    O -->|Yes| C
+    O -->|No| P["Auto-create Tables\nin MySQL"]
+    P --> Q["Classification Complete"]
+
+    style H fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style I fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style J fill:#dcfce7,stroke:#22c55e,color:#14532d
+    style K fill:#fef9c3,stroke:#eab308,color:#713f12
+    style Q fill:#d1fae5,stroke:#10b981,color:#065f46
+    style M fill:#fee2e2,stroke:#ef4444,color:#991b1b

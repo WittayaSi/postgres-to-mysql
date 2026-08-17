@@ -1,0 +1,60 @@
+{
+  "basic": {
+    "schedule": "00 02 * * *",
+    "enabled": true,
+    "description": "ข้อมูลพื้นฐาน - ทุกวันเวลา 02:00",
+    "tables": {
+      "include": [
+        "*"
+      ],
+      "exclude": [
+        "*log*",
+        "*_log",
+        "log_*",
+        "xe_*",
+        "asm_*"
+      ]
+    },
+    "tableConfigs": {
+      "sys_var": {
+        "skipOrphanCleanup": true
+      }
+    }
+  },
+  "opd": {
+    "schedule": "*/25 * * * *",
+    "enabled": true,
+    "description": "ข้อมูล OPD - ทุก 25 นาที",
+    "opdDaysBack": 7,
+    "tables": {
+      "include": [
+        "*"
+      ],
+      "exclude": [
+        "*log*",
+        "*_log",
+        "log_*",
+        "xe_*",
+        "asm_*"
+      ]
+    }
+  },
+  "ipd": {
+    "schedule": "0 */1 * * *",
+    "enabled": true,
+    "description": "ข้อมูล IPD - ทุก 1 ชั่วโมง",
+    "ipdDaysBack": 45,
+    "tables": {
+      "include": [
+        "*"
+      ],
+      "exclude": [
+        "*log*",
+        "*_log",
+        "log_*",
+        "xe_*",
+        "asm_*"
+      ]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+sequenceDiagram
+    participant UI as Browser
+    participant API as API Routes
+    participant TE as TransferEngine
+    participant PG as PostgreSQL
+    participant MY as MySQL
+    participant WS as Socket.IO
+
+    UI->>UI: User selects Tables + clicks Start
+    UI->>API: POST /api/transfer
+    API->>UI: 200 OK (started)
+    API->>TE: transfer(type, options)
+
+    Note over TE: Basic (Full Sync)
+    rect rgb(254, 249, 195)
+    loop Each Table
+        TE->>MY: TRUNCATE TABLE
+        TE->>PG: COUNT(*)
+        loop Batch 1000 rows
+            TE->>PG: SELECT * LIMIT 1000
+            TE->>MY: INSERT INTO VALUES
+            TE->>WS: Emit progress
+            WS->>UI: Update UI
+        end
+    end
+    end
+
+    Note over TE: OPD (VN Filter)
+    rect rgb(219, 234, 254)
+    loop Each Table
+        TE->>PG: COUNT WHERE vn LIKE prefix
+        loop Batch
+            TE->>PG: SELECT WHERE vn LIKE prefix
+            TE->>MY: UPSERT (ON DUPLICATE KEY)
+            TE->>WS: Emit progress
+        end
+    end
+    end
+
+    Note over TE: IPD (AN Range)
+    rect rgb(220, 252, 231)
+    TE->>PG: MIN(an) FROM an_stat WHERE dchdate >= N days
+    loop Each Table
+        TE->>PG: COUNT WHERE an >= minAn
+        loop Batch
+            TE->>PG: SELECT WHERE an >= minAn
+            TE->>MY: UPSERT (ON DUPLICATE KEY)
+            TE->>WS: Emit progress
+        end
+    end
+    end
+
+    TE->>WS: Transfer Complete!
+    WS->>UI: Progress 100%

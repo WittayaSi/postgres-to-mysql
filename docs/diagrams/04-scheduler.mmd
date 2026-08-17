@@ -1,0 +1,28 @@
+flowchart TD
+    A["Cron Trigger"] --> B{"Job Type?"}
+
+    B -->|"Basic\nDaily 02:00"| C["transferBasic()"]
+    C --> C1["Full Sync\nTRUNCATE + INSERT"]
+
+    B -->|"OPD\nEvery 10 min"| D{"Current Hour?"}
+    D -->|"00:00 - 06:00"| E["Yesterday + Today\nVN prefix range"]
+    D -->|"06:00 - 23:59"| F["Today only\nVN prefix"]
+    E --> G["transferOpd()"]
+    F --> G
+    G --> G1["Upsert by VN prefix"]
+
+    B -->|"IPD\nEvery 1 hour"| H["Find MIN AN\nfrom an_stat\nWHERE dchdate >= 45 days"]
+    H --> I["transferIpd()"]
+    I --> I1["Upsert by AN range"]
+
+    C1 --> J["Log Result"]
+    G1 --> J
+    I1 --> J
+
+    style C fill:#fef9c3,stroke:#eab308,color:#713f12
+    style C1 fill:#fef9c3,stroke:#eab308,color:#713f12
+    style G fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style G1 fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style I fill:#dcfce7,stroke:#22c55e,color:#14532d
+    style I1 fill:#dcfce7,stroke:#22c55e,color:#14532d
+    style J fill:#d1fae5,stroke:#10b981,color:#065f46

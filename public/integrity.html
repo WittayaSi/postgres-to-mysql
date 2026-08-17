@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Integrity Check - PG vs MySQL</title>
+  <meta name="description" content="ตรวจสอบความครบถ้วนของข้อมูลระหว่าง PostgreSQL และ MySQL">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/output.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background: #f1f5f9; margin: 0; }
+    .integrity-grid {
+      display: grid;
+      grid-template-columns: 60px 1fr 100px 120px 120px 100px 80px;
+      align-items: center;
+      font-size: 0.8rem;
+    }
+    .integrity-grid.header-row {
+      background: #f8fafc;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.5rem;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    .integrity-grid.data-row {
+      padding: 0.5rem;
+      border-bottom: 1px solid #f1f5f9;
+      transition: background 0.1s;
+    }
+    .integrity-grid.data-row:hover { background: #f8fafc; }
+    .integrity-grid.data-row:nth-child(even) { background: #fafbfc; }
+    .integrity-grid.data-row:nth-child(even):hover { background: #f1f5f9; }
+    .num-cell { text-align: right; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    .diff-positive { color: #dc2626; font-weight: 600; }
+    .diff-zero { color: #16a34a; }
+    .diff-negative { color: #b45309; font-weight: 600; }
+    .category-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .cat-basic { background: #f3f4f6; color: #4b5563; }
+    .cat-opd { background: #dbeafe; color: #1d4ed8; }
+    .cat-ipd { background: #dcfce7; color: #15803d; }
+    .loading-spinner {
+      display: inline-block;
+      width: 1rem;
+      height: 1rem;
+      border: 2px solid #e5e7eb;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .filter-card {
+      background: white;
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 1rem;
+    }
+    .summary-card {
+      padding: 1rem;
+      border-radius: 0.75rem;
+      text-align: center;
+    }
+    .summary-card .value { font-size: 2rem; font-weight: 700; }
+    .summary-card .label { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="flex justify-between items-center">
+      <h1 class="header-title">
+        <i data-lucide="shield-check" class="inline-block w-6 h-6 mr-2"></i>
+        Data Integrity Check — ตรวจสอบความครบถ้วนของข้อมูล
+      </h1>
+      <a href="/" class="btn flex items-center gap-2" style="background: rgba(255,255,255,0.15); color: white; text-decoration: none;">
+        <i data-lucide="arrow-left" class="w-4 h-4"></i> กลับหน้าหลัก
+      </a>
+    </div>
+    <p style="opacity: 0.8; font-size: 0.85rem; margin-top: 0.5rem;">
+      เปรียบเทียบจำนวนข้อมูลระหว่าง PostgreSQL (ต้นทาง) กับ MySQL (ปลายทาง) เพื่อตรวจสอบว่าข้อมูลครบถ้วนหรือไม่
+    </p>
+  </header>
+
+  <main style="max-width: 1200px; margin: 0 auto; padding: 1.5rem;">
+    <!-- Filter Section -->
+    <div class="filter-card">
+      <div class="flex flex-wrap items-end gap-4">
+        <div>
+          <label class="text-xs text-secondary font-medium block mb-1">ประเภทข้อมูล</label>
+          <select id="check-type" class="input-sm" style="width: 160px;">
+            <option value="opd">OPD (ตาราง VN)</option>
+            <option value="ipd">IPD (ตาราง AN)</option>
+            <option value="basic">Basic (ข้อมูลพื้นฐาน)</option>
+            <option value="all">ทั้งหมด</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-secondary font-medium block mb-1">โหมด</label>
+          <select id="date-mode" class="input-sm" style="width: 140px;" onchange="toggleDateMode()">
+            <option value="range">ช่วงวันที่</option>
+            <option value="month">เลือกเดือน</option>
+          </select>
+        </div>
+        <div id="range-inputs" class="flex items-end gap-2">
+          <div>
+            <label class="text-xs text-secondary font-medium block mb-1">วันที่เริ่มต้น</label>
+            <input type="date" id="date-from" class="input-sm" style="width: 160px;">
+          </div>
+          <div>
+            <label class="text-xs text-secondary font-medium block mb-1">วันที่สิ้นสุด</label>
+            <input type="date" id="date-to" class="input-sm" style="width: 160px;">
+          </div>
+        </div>
+        <div id="month-input" class="hidden">
+          <label class="text-xs text-secondary font-medium block mb-1">เลือกเดือน</label>
+          <input type="month" id="month-picker" class="input-sm" style="width: 160px;">
+        </div>
+        <div>
+          <span id="prefix-preview" class="text-xs text-muted" style="display: block; margin-bottom: 0.25rem;"></span>
+          <button id="btn-check" class="btn btn-primary flex items-center gap-2" onclick="runCheck()">
+            <i data-lucide="search" class="w-4 h-4"></i> ตรวจสอบ
+          </button>
+        </div>
+        <div id="export-section" class="hidden ml-auto">
+          <button class="btn btn-ghost flex items-center gap-1 text-sm" onclick="exportCSV()">
+            <i data-lucide="download" class="w-4 h-4"></i> Export CSV
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div id="progress-container" class="hidden" style="margin-bottom: 1.5rem; background: white; padding: 1rem 1.25rem; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-sm font-medium text-secondary" id="progress-text">กำลังเตรียมการตรวจสอบ...</span>
+        <span class="text-sm font-bold text-primary" id="progress-percent">0%</span>
+      </div>
+      <div style="width: 100%; height: 8px; background: #e2e8f0; border-radius: 9999px; overflow: hidden;">
+        <div id="progress-fill" style="height: 100%; width: 0%; background: #3b82f6; transition: width 0.3s ease;"></div>
+      </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div id="summary-section" class="hidden" style="display: none; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem;">
+      <div class="summary-card" style="background: #eff6ff; border: 1px solid #bfdbfe;">
+        <div class="value" style="color: #2563eb;" id="sum-total">0</div>
+        <div class="label">ตารางทั้งหมด</div>
+      </div>
+      <div class="summary-card" style="background: #f0fdf4; border: 1px solid #bbf7d0;">
+        <div class="value" style="color: #16a34a;" id="sum-matched">0</div>
+        <div class="label">✅ ข้อมูลตรงกัน</div>
+      </div>
+      <div class="summary-card" style="background: #fef2f2; border: 1px solid #fecaca;">
+        <div class="value" style="color: #dc2626;" id="sum-mismatched">0</div>
+        <div class="label">❌ ข้อมูลไม่ตรง</div>
+      </div>
+      <div class="summary-card" style="background: #faf5ff; border: 1px solid #e9d5ff;">
+        <div class="value" style="color: #7c3aed;" id="sum-diff">0</div>
+        <div class="label">แถวที่ขาด (รวม)</div>
+      </div>
+    </div>
+
+    <!-- Results Table -->
+    <div class="card" style="padding: 0; overflow: hidden;">
+      <div class="integrity-grid header-row">
+        <span>#</span>
+        <span>ชื่อตาราง</span>
+        <span>ประเภท</span>
+        <span style="text-align: right;">PG (ต้นทาง)</span>
+        <span style="text-align: right;">MySQL (ปลายทาง)</span>
+        <span style="text-align: right;">ส่วนต่าง</span>
+        <span style="text-align: center;">สถานะ</span>
+      </div>
+      <div id="results-body" style="max-height: calc(100vh - 380px); overflow-y: auto;">
+        <div class="empty-state" style="padding: 3rem;">
+          <div class="empty-state-icon">🔍</div>
+          <div class="empty-state-text">เลือกประเภทข้อมูลและช่วงวันที่ แล้วกด "ตรวจสอบ"</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div id="status-bar" class="hidden text-xs text-muted mt-2" style="padding: 0.5rem;"></div>
+  </main>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/js/integrity.js"></script>
+  <script>
+    lucide.createIcons();
+    // Set default dates to today
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('date-from').value = today;
+    document.getElementById('date-to').value = today;
+    document.getElementById('month-picker').value = today.substring(0, 7);
+    updatePrefixPreview();
+  </script>
+</body>
+</html>

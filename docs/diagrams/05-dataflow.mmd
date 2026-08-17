@@ -1,0 +1,32 @@
+flowchart LR
+    subgraph PG["PostgreSQL (Source)"]
+        direction TB
+        PB["Basic Tables\n(no vn, no an)"]
+        PO["OPD Tables\n(has vn)"]
+        PI["IPD Tables\n(has an)"]
+    end
+
+    subgraph Strategy["Transfer Strategy"]
+        direction TB
+        S1["Full Sync\nTruncate + Insert"]
+        S2["Upsert by VN\nON DUPLICATE KEY"]
+        S3["Upsert by AN\nON DUPLICATE KEY"]
+    end
+
+    subgraph MY["MySQL (Destination)"]
+        direction TB
+        MB["Basic Tables"]
+        MO["OPD Tables"]
+        MI["IPD Tables"]
+    end
+
+    PB -->|"Daily 02:00"| S1 --> MB
+    PO -->|"Every 10 min"| S2 --> MO
+    PI -->|"Every 1 hour"| S3 --> MI
+
+    style PG fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    style Strategy fill:#1e1b4b,stroke:#6366f1,color:#fff
+    style MY fill:#14532d,stroke:#22c55e,color:#fff
+    style S1 fill:#fef9c3,stroke:#eab308,color:#713f12
+    style S2 fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    style S3 fill:#dcfce7,stroke:#22c55e,color:#14532d

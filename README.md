@@ -198,6 +198,9 @@ git pull
 docker-compose up -d --build
 ```
 
+> 💡 **กรณีเจอ Error `fatal: detected dubious ownership`**:  
+> ให้รันคำสั่งเปิดสิทธิ์: `git config --global --add safe.directory /www/wwwroot/postgres-to-mysql` หรือ `git config --global --add safe.directory '*'` แล้วสั่ง `git pull` ใหม่อีกครั้ง
+
 ---
 
 ## Deployment via aaPanel / Linux Server

@@ -292,6 +292,7 @@ postgres-to-mysql/
 | `MYSQL_USER` | `root` | MySQL user |
 | `MYSQL_PASSWORD` | - | MySQL password |
 | `PORT` | `3030` | Web server port |
+| `TZ` | `Asia/Bangkok` | Container / Server Timezone (UTC+7 Thailand) |
 | `BATCH_SIZE` | `500` | Rows fetched per batch from PostgreSQL |
 | `TRANSFER_THROTTLE_MS` | `150` | Throttle delay between batches (ms) |
 | `GEMINI_API_KEY` | - | Optional Gemini API key |

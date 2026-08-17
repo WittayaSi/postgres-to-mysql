@@ -26,8 +26,10 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV TZ=Asia/Bangkok
 
-# Install pnpm
+# Install tzdata for Asia/Bangkok Timezone (UTC+7)
+RUN apk add --no-cache tzdata
 RUN npm install -g pnpm
 
 # Copy package files and install production dependencies only

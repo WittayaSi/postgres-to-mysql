@@ -30,6 +30,9 @@ classified.json
 tsc-errors.txt
 data/
 
+# AI Assistant Customizations
+.agents/
+
 # OS metadata & stray path artifacts
 .DS_Store
 Thumbs.db

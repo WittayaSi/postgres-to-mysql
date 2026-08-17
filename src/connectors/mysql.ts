@@ -82,17 +82,6 @@ class MySQLConnector {
   }
 
   private loadConfig(): MySQLConfig {
-    // Try to load from database.json first
-    try {
-      const configPath = path.join(process.cwd(), 'config/database.json');
-      if (fs.existsSync(configPath)) {
-        const dbConfig: DatabaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        return dbConfig.mysql;
-      }
-    } catch (error) {
-      // Fallback to env
-    }
-    
     return {
       host: process.env.MYSQL_HOST || 'localhost',
       port: parseInt(process.env.MYSQL_PORT || '3306'),

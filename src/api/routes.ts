@@ -27,19 +27,26 @@ import {
 
 const router: Router = express.Router();
 
-// Database config file path
-const configPath = path.join(process.cwd(), 'config/database.json');
-
-// Load database config
-function loadDbConfig(): DatabaseConfig {
-  try {
-    if (fs.existsSync(configPath)) {
-      return JSON.parse(fs.readFileSync(configPath, 'utf-8')) as DatabaseConfig;
+// Helper to update key-value pairs in .env file
+function updateEnvFile(keyValues: Record<string, string>): void {
+  const envPath = path.join(process.cwd(), '.env');
+  let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+  
+  for (const [key, value] of Object.entries(keyValues)) {
+    const regex = new RegExp(`^${key}=.*$`, 'm');
+    if (regex.test(content)) {
+      content = content.replace(regex, `${key}=${value}`);
+    } else {
+      content += `\n${key}=${value}`;
     }
-  } catch (error) {
-    const err = error as Error;
-    logger.error('Error loading database config', { error: err.message });
+    process.env[key] = value;
   }
+  
+  fs.writeFileSync(envPath, content, 'utf-8');
+}
+
+// Load database config directly from process.env
+function loadDbConfig(): DatabaseConfig {
   return {
     postgres: {
       host: process.env.PG_HOST || 'localhost',
@@ -58,9 +65,20 @@ function loadDbConfig(): DatabaseConfig {
   };
 }
 
-// Save database config
+// Save database config directly to .env file
 function saveDbConfig(config: DatabaseConfig): void {
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  updateEnvFile({
+    PG_HOST: config.postgres.host,
+    PG_PORT: String(config.postgres.port),
+    PG_DATABASE: config.postgres.database,
+    PG_USER: config.postgres.user,
+    PG_PASSWORD: config.postgres.password,
+    MYSQL_HOST: config.mysql.host,
+    MYSQL_PORT: String(config.mysql.port),
+    MYSQL_DATABASE: config.mysql.database,
+    MYSQL_USER: config.mysql.user,
+    MYSQL_PASSWORD: config.mysql.password,
+  });
 }
 
 // Get database config

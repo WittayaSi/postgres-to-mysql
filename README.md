@@ -172,6 +172,23 @@ pnpm start
 
 ---
 
+## Deployment via Docker / Docker Compose ⭐ Recommended
+
+```bash
+# 1. Clone repository
+git clone https://github.com/WittayaSi/postgres-to-mysql.git
+cd postgres-to-mysql
+
+# 2. Setup .env file
+cp .env.example .env
+nano .env
+
+# 3. Start container using Docker Compose
+docker-compose up -d --build
+```
+
+---
+
 ## Deployment via aaPanel / Linux Server
 
 1. ติดตั้ง `Node.js project manager` ใน aaPanel (เลือก Node.js v20/v22)

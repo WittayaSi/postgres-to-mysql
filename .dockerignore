@@ -1,0 +1,12 @@
+node_modules
+.pnpm-store
+dist
+build
+logs
+scratch
+.git
+.agents
+.env
+*.log
+ classified.json
+tsc-errors.txt

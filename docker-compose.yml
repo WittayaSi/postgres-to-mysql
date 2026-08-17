@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  postgres-to-mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: postgres-to-mysql
+    restart: always
+    ports:
+      - "${PORT:-3030}:3030"
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3030/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

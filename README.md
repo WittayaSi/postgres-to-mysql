@@ -1,22 +1,27 @@
 # PostgreSQL to MySQL Data Transfer System
 
-ระบบถ่ายโอนข้อมูลอัตโนมัติจาก PostgreSQL ไปยัง MySQL พร้อม Web UI
+ระบบถ่ายโอนข้อมูลอัตโนมัติจาก PostgreSQL (HOSxP) ไปยัง MySQL พร้อม Real-time Web UI Dashboard และ AI Diagnostic Engine
 
 ## Features
 
 - ✅ **Auto Transfer**: รันอัตโนมัติตาม schedule (cron)
 - ✅ **Manual Transfer**: Web UI สำหรับเลือกตาราง/ช่วงเวลา
-- ✅ **Table Classification**: แบ่งตารางอัตโนมัติตาม column (Basic/OPD/IPD)
-- ✅ **Real-time Progress**: แสดงความคืบหน้าแบบ real-time ผ่าน Socket.IO
+- ✅ **4-Layer Smart Classification Architecture**: จัดกลุ่มตารางอัตโนมัติ (Basic/OPD/IPD) **แบบไม่มีตารางซ้ำซ้อน (0% Overlaps)**
+- ✅ **Smart Change Detector**: เช็คการเปลี่ยนแปลงข้อมูลใน PostgreSQL ก่อนย้าย ข้ามตารางที่ไม่เปลี่ยนแปลงใน $0.0\text{s}$
+- ✅ **Anti-Freeze & Performance Tuning**: 
+  - ยกเลิกการใช้ `_last_sync` 100% ช่วยขจัดปัญหา Full Table Scan และแก้ปัญหา MySQL ค้าง
+  - เพิ่ม **Batch Throttling (`TRANSFER_THROTTLE_MS = 150ms`)** เว้นจังหวะพัก ไม่แย่ง CPU/Disk I/O ของเซิร์ฟเวอร์
+  - สร้าง Index อัตโนมัติ (`idx_vn`, `idx_an`) เพื่อให้คิวรี่ช่วงเวลาได้รวดเร็ว
+- ✅ **🤖 AI Diagnostic Engine**: วิเคราะห์สาเหตุของ Error ระหว่างย้ายข้อมูลอัตโนมัติ (รองรับ Gemini API, OpenAI API และ Offline Rule Engine)
+- ✅ **Real-time Monitoring**: แสดงความคืบหน้าแบบ real-time ผ่าน Socket.io
 - ✅ **Multi-tab Support**: รองรับเปิดหลาย tab ทำงานพร้อมกัน (Worker ID)
-- ✅ **Configurable**: ตั้งค่า schedule, database, tables ผ่าน Web UI
-- ✅ **Auto Schema Sync**: สร้างตารางอัตโนมัติใน MySQL + sync columns เพิ่มเติม
-- ✅ **Incremental Transfer**: OPD ใช้ VN prefix, IPD ใช้ AN range (dchdate)
-- ✅ **Read-Only Source**: PostgreSQL เชื่อมต่อแบบ read-only เพื่อความปลอดภัย
-- ✅ **Upsert with Data Preservation**: Basic transfer ใช้ upsert รักษา column เฉพาะ MySQL
-- ✅ **Orphan Row Cleanup**: ลบ row ที่ไม่มีใน PostgreSQL ด้วย `_last_sync` timestamp marker
+- ✅ **Secure Config via .env**: โหลดและบันทึกการตั้งค่าผ่านไฟล์ `.env` โดยตรง ปลอดภัย ไร้การหลุดของรหัสผ่าน
+- ✅ **Auto Schema Sync**: สร้างตารางและเพิ่มคอลัมน์อัตโนมัติใน MySQL 
+- ✅ **Incremental Transfer**: OPD ใช้ VN prefix, IPD ใช้ AN range
+- ✅ **Read-Only Source**: PostgreSQL เชื่อมต่อแบบ read-only เพื่อความปลอดภัยสูงสุด
 - ✅ **Connection Retry**: auto-reconnect เมื่อ connection หลุดระหว่าง transfer
-- ✅ **Performance Tuning**: Configurable bulk size + disable/enable indexes
+
+---
 
 ## Installation
 
@@ -24,11 +29,13 @@
 pnpm install
 ```
 
+---
+
 ## Configuration
 
-### 1. Database Connection
+### 1. Database Connection (.env)
 
-คัดลอก `.env.example` เป็น `.env` แล้วแก้ไข:
+คัดลอก `.env.example` เป็น `.env` แล้วแก้ไขค่าการเชื่อมต่อ:
 
 ```env
 # PostgreSQL (Source - Read Only)
@@ -46,18 +53,20 @@ MYSQL_USER=root
 MYSQL_PASSWORD=your_password
 
 # Server
-PORT=3000
+PORT=3030
 
-# Transfer Settings
-BATCH_SIZE=1000            # จำนวน rows ที่ดึงจาก PG ต่อ batch
-MYSQL_BULK_SIZE=50         # จำนวน rows ที่ insert/upsert ต่อ SQL statement (default: 50)
+# Transfer Settings & Anti-Freeze Throttling
+BATCH_SIZE=500
+TRANSFER_THROTTLE_MS=150
 
-# Connection Retry
-DB_RETRY_COUNT=3           # จำนวนครั้งที่ retry เมื่อ connection หลุด (default: 3)
-DB_RETRY_DELAY_MS=2000     # delay ระหว่าง retry (ms, เพิ่มขึ้นตาม attempt) (default: 2000)
+# Optional AI Diagnostic Keys
+GEMINI_API_KEY=your_gemini_api_key
+OPENAI_API_KEY=your_openai_api_key
 ```
 
-หรือตั้งค่าผ่าน Web UI → ปุ่ม "กำหนดฐานข้อมูล" (บันทึกที่ `config/database.json`)
+> การตั้งค่าเชื่อมต่อฐานข้อมูลทั้งหมดถูกจัดการผ่านไฟล์ `.env` เพื่อความปลอดภัย
+
+---
 
 ### 2. Schedule & Table Filter (config/tables.json)
 
@@ -73,9 +82,9 @@ DB_RETRY_DELAY_MS=2000     # delay ระหว่าง retry (ms, เพิ่
     }
   },
   "opd": {
-    "schedule": "*/30 * * * *",
+    "schedule": "*/25 * * * *",
     "enabled": true,
-    "description": "ข้อมูล OPD - ทุก 30 นาที",
+    "description": "ข้อมูล OPD - ทุก 25 นาที",
     "tables": {
       "include": ["*"],
       "exclude": ["*log*", "*_log", "log_*", "xe_*", "asm_*"]
@@ -94,7 +103,48 @@ DB_RETRY_DELAY_MS=2000     # delay ระหว่าง retry (ms, เพิ่
 }
 ```
 
-> ตารางที่ตรงกับ `exclude` pattern จะไม่ถูก transfer และไม่ถูกสร้างใน MySQL
+---
+
+## Table Classification Architecture
+
+ระบบใช้ **4-Layer Smart Classification Architecture** เพื่อจัดกลุ่มตารางใน HOSxP (กว่า 6,400 ตาราง) ให้เข้าสังกัดเพียง 1 กลุ่มเด็ดขาด **(0% Overlaps)**:
+
+```
+PostgreSQL Tables (6,400+ Tables)
+  ├── Layer 1: Explicit Overrides (ระบุเฉพาะใน config/tables.json -> tableConfigs)
+  ├── Layer 2: IPD Domain Patterns (ipt%, an_%, ipd_%, ward%, bed%, %_ipd) -> IPD Group
+  ├── Layer 3: Contains Column 'vn' -> OPD Group (รวมถึง lab_head, xray_head, opitemrece)
+  ├── Layer 4: Fallback Column 'an' -> IPD Group
+  └── Default: Setup & Reference Tables -> Basic Group
+```
+
+| กลุ่ม | รายละเอียดการทำงาน | ตัวอย่างตาราง |
+|-------|---------------------|---------------|
+| **Basic** | ตารางพื้นฐาน/ตั้งค่าที่ไม่มีคอลัมน์ `vn` หรือ `an` (ซิงค์แบบ Smart Sync วันละ 1 ครั้ง ตี 2) | `patient`, `doctor`, `sys_var`, `drugitems` |
+| **OPD** | ตารางที่มีคอลัมน์ `vn` รวมถึงตารางสั่งการกลาง (ซิงค์ทุก 25 นาที ย้อนหลัง 7 วัน) | `ovst`, `opdscreen`, `lab_head`, `xray_head`, `opitemrece` |
+| **IPD** | ตารางผู้ป่วยในโดยเฉพาะ (ซิงค์ทุก 1 ชั่วโมง ย้อนหลัง 45 วัน) | `ipt`, `iptdiag`, `an_stat`, `iptadm`, `ipd_doctor_order` |
+
+---
+
+## Transfer Strategy
+
+| ประเภท | Strategy | รายละเอียด |
+|--------|----------|------------|
+| **Basic** (มี PK) | Safe Upsert | `INSERT ON DUPLICATE KEY UPDATE` (อัปเดตเฉพาะคอลัมน์ที่มีใน PG) |
+| **Basic** (ไม่มี PK) | Truncate + Insert | ลบข้อมูลเก่าทั้งหมดแล้วโอนใหม่ |
+| **OPD** | Upsert by VN prefix | ใช้ VN prefix filter (ปี พ.ศ. YYMMDD) |
+| **IPD** (Manual) | Upsert by AN range | ใช้ AN range ที่ผู้ใช้กำหนด |
+| **IPD** (Scheduler) | Upsert by AN from an_stat | หา MIN(an) จาก `an_stat` ที่ dchdate ≥ N วัน |
+
+---
+
+## 🤖 AI Diagnostic Engine
+
+ระบบฝังเครื่องมือวิเคราะห์ข้อผิดพลาดด้วย AI อัตโนมัติ (`src/ai/aiDiagnoser.ts`):
+- **วิเคราะห์ Error อัตโนมัติ**: เมื่อเกิดปัญหาในการย้ายข้อมูล (เช่น Connection Timeout, SQL Syntax, Data Truncation) AI จะทำการวิเคราะห์สาเหตุและแสดงทางแก้ไขผ่าน Web UI Dashboard ทันที
+- **Multi-Engine Support**: รองรับ **Gemini API**, **OpenAI API** และมีระบบ **Offline Rule Engine** สำรองทำงานอัตโนมัติหากไม่มี API Key
+
+---
 
 ## Usage
 
@@ -115,57 +165,20 @@ pnpm run build
 pnpm start
 ```
 
-เปิด browser ไปที่ http://localhost:3000
+เปิด browser ไปที่ `http://localhost:3030` (หรือ Port ที่ตั้งไว้ใน `.env`)
 
-## Table Classification
+---
 
-| Column | ประเภท |
-|--------|--------|
-| ไม่มี vn, an | Basic (ตารางพื้นฐาน) |
-| มี vn | OPD |
-| มี an | IPD |
+## Deployment via aaPanel / Linux Server
 
-> ตารางที่มีทั้ง vn และ an จะปรากฏทั้งใน OPD และ IPD
+1. ติดตั้ง `Node.js project manager` ใน aaPanel (เลือก Node.js v20/v22)
+2. วางโฟลเดอร์ไว้ที่ `/www/wwwroot/postgres-to-mysql`
+3. ตั้งค่าไฟล์ `.env`
+4. สั่ง `pnpm install` และ `npm run build`
+5. ใน aaPanel: เพิ่ม Node Project ให้ชี้รันที่ `dist/server.js` บน Port `3030`
+6. ปลดล็อค Firewall Port `3030` ในเมนู Security ของ aaPanel
 
-## Transfer Strategy
-
-| ประเภท | Strategy | รายละเอียด |
-|--------|----------|------------|
-| **Basic** (มี PK) | Upsert + Orphan Cleanup | INSERT ON DUPLICATE KEY UPDATE + ลบ row ที่ไม่มีใน PG (`_last_sync`) |
-| **Basic** (ไม่มี PK) | Truncate + Insert | ลบข้อมูลเก่าทั้งหมดแล้วโอนใหม่ |
-| **OPD** | Upsert by VN prefix | ใช้ VN prefix filter (Buddhist year YYMM) |
-| **IPD** (Manual) | Upsert by AN range | ใช้ AN range ที่ผู้ใช้กำหนด |
-| **IPD** (Scheduler) | Upsert by AN from an_stat | หา MIN(an) จาก an_stat ที่ dchdate ≥ N วัน |
-
-### Basic Transfer Flow (Upsert Mode)
-
-```
-1. Sync schema (เพิ่ม column ที่ขาด + เพิ่ม _last_sync)
-2. Disable indexes (เพิ่มความเร็ว)
-3. Upsert ข้อมูล + set _last_sync = NOW()
-4. ลบ orphan rows (WHERE _last_sync < เวลาเริ่ม transfer)
-5. Enable indexes
-```
-
-**ข้อดี:**
-- ✅ รักษา column ที่มีเฉพาะ MySQL (เช่น `nhso_adp_code`) — อัปเดตเฉพาะ column ที่มีใน PG
-- ✅ ลบ row ที่ถูกลบจาก PostgreSQL อัตโนมัติ
-
-### Schedule
-
-- **Basic**: ทุกวัน ตี 2 (`00 02 * * *`) — Upsert + Orphan Cleanup
-- **OPD**: ทุก 30 นาที (`*/30 * * * *`) — VN prefix filter
-- **IPD**: ทุก 1 ชั่วโมง (`0 */1 * * *`) — AN ย้อนหลัง 45 วัน
-
-## Connection Resilience
-
-ระบบมีความทนทานต่อ connection ที่ไม่เสถียร:
-
-- **Pool Keep-Alive**: ทั้ง PG และ MySQL เปิด keepalive ป้องกัน connection timeout
-- **Auto Retry**: เมื่อ query ล้มเหลวจาก connection error จะ retry อัตโนมัติ (ค่า default 3 ครั้ง)
-- **Exponential Backoff**: delay เพิ่มขึ้นในแต่ละรอบ retry (2s, 4s, 6s)
-- **Pool Error Recovery**: PG pool ดัก error event ไม่ให้ process crash
-- **Transfer Retry**: แต่ละตารางที่ transfer ล้มเหลวจะ retry สูงสุด 2 ครั้ง
+---
 
 ## API Endpoints
 
@@ -180,48 +193,55 @@ pnpm start
 | GET | `/api/transfer/status` | สถานะ transfer ทุก workers |
 | GET | `/api/transfer/status/:workerId` | สถานะ transfer ของ worker |
 | GET | `/api/schedule` | ดู schedule status |
-| GET | `/api/config/database` | อ่านค่า database config |
-| POST | `/api/config/database` | บันทึก database config |
+| GET | `/api/config/database` | อ่านค่า database config จาก `.env` |
+| POST | `/api/config/database` | บันทึก database config ลง `.env` |
 | POST | `/api/config/test` | ทดสอบ database connection |
-| GET | `/api/config/scheduler` | อ่านค่า scheduler config |
-| POST | `/api/config/scheduler` | บันทึก scheduler config |
+| GET | `/api/ai/status` | เช็คสถานะ AI Diagnostic Engine |
+| POST | `/api/ai/diagnose` | ส่ง error log ให้ AI ช่วยวิเคราะห์ |
 | GET | `/api/logs` | ดู logs ล่าสุด |
+
+---
 
 ## Project Structure
 
 ```
 postgres-to-mysql/
 ├── config/
-│   ├── tables.json            # Schedule & table filter config
-│   ├── database.json          # Database connection config (auto-created)
-│   └── database.json.example
+│   └── tables.json            # Schedule & table filter config
 ├── public/
-│   ├── index.html             # Web UI
+│   ├── index.html             # Web UI Dashboard
 │   ├── css/styles.css         # Tailwind source
 │   ├── css/output.css         # Compiled CSS
 │   └── js/app.js              # Frontend logic
 ├── src/
+│   ├── ai/
+│   │   ├── aiDiagnoser.ts     # AI Diagnostic Engine (Gemini / OpenAI / Offline)
+│   │   └── schemaTranslator.ts# PostgreSQL to MySQL DDL Translator
 │   ├── api/routes.ts          # REST API endpoints
 │   ├── classifiers/
-│   │   └── tableClassifier.ts # Table classification (Basic/OPD/IPD)
-│   ├── config/index.ts        # App configuration
+│   │   └── tableClassifier.ts # 4-Layer Smart Classification Architecture
+│   ├── config/index.ts        # App configuration loader
 │   ├── connectors/
 │   │   ├── postgres.ts        # PostgreSQL connector (read-only, with retry)
-│   │   └── mysql.ts           # MySQL connector (write, with retry)
+│   │   └── mysql.ts           # MySQL connector (write, safe upsert, no _last_sync)
 │   ├── scheduler/
 │   │   └── jobScheduler.ts    # Cron job scheduler
 │   ├── transfer/
-│   │   ├── transferEngine.ts  # Data transfer engine (upsert + orphan cleanup)
+│   │   ├── transferEngine.ts  # Data transfer engine (throttling, auto indexing)
 │   │   └── transferHistory.ts # Transfer history tracking
 │   ├── types.ts               # TypeScript type definitions
 │   └── utils/
+│       ├── pgChangeDetector.ts# Smart Change Detection engine
 │       ├── logger.ts          # Winston logger
 │       └── retry.ts           # Connection retry utility
 ├── server.ts                  # Express server entry point
 ├── .env                       # Environment variables
+├── .env.example               # Environment template
 ├── package.json
 └── tsconfig.json
 ```
+
+---
 
 ## Environment Variables
 
@@ -237,11 +257,13 @@ postgres-to-mysql/
 | `MYSQL_DATABASE` | `hospital_db` | MySQL database |
 | `MYSQL_USER` | `root` | MySQL user |
 | `MYSQL_PASSWORD` | - | MySQL password |
-| `PORT` | `3000` | Web server port |
-| `BATCH_SIZE` | `1000` | Rows fetched per batch from PostgreSQL |
-| `MYSQL_BULK_SIZE` | `50` | Rows per INSERT/UPSERT SQL statement |
-| `DB_RETRY_COUNT` | `3` | Connection retry attempts |
-| `DB_RETRY_DELAY_MS` | `2000` | Base delay between retries (ms) |
+| `PORT` | `3030` | Web server port |
+| `BATCH_SIZE` | `500` | Rows fetched per batch from PostgreSQL |
+| `TRANSFER_THROTTLE_MS` | `150` | Throttle delay between batches (ms) |
+| `GEMINI_API_KEY` | - | Optional Gemini API key |
+| `OPENAI_API_KEY` | - | Optional OpenAI API key |
+
+---
 
 ## License
 

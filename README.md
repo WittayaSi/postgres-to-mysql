@@ -174,6 +174,7 @@ pnpm start
 
 ## Deployment via Docker / Docker Compose ⭐ Recommended
 
+### ติดตั้งครั้งแรก (First-Time Setup):
 ```bash
 # 1. Clone repository
 git clone https://github.com/WittayaSi/postgres-to-mysql.git
@@ -184,6 +185,16 @@ cp .env.example .env
 nano .env
 
 # 3. Start container using Docker Compose
+docker-compose up -d --build
+```
+
+### การอัปเดตระบบในครั้งถัดไป (Updating Existing App):
+```bash
+# 1. ดึงโค้ดเวอร์ชันล่าสุดจาก Git
+cd postgres-to-mysql
+git pull
+
+# 2. Rebuild และ Restart Docker Container
 docker-compose up -d --build
 ```
 

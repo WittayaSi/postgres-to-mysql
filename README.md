@@ -21,7 +21,8 @@
 - ✅ **Secure Config via .env**: โหลดและบันทึกการตั้งค่าผ่านไฟล์ `.env` โดยตรง ปลอดภัย ไร้การหลุดของรหัสผ่าน
 - ✅ **Auto Schema Sync**: สร้างตารางและเพิ่มคอลัมน์อัตโนมัติใน MySQL 
 - ✅ **Incremental Transfer**: OPD ใช้ VN prefix, IPD ใช้ AN range
-- ✅ **Read-Only Source**: PostgreSQL เชื่อมต่อแบบ read-only เพื่อความปลอดภัยสูงสุด
+- ✅ **Read-Only Source & Safe Encoding**: PostgreSQL เชื่อมต่อแบบ read-only และใช้ `SQL_ASCII` client encoding ช่วยป้องกันปัญหา Character Conversion Error (`0x8b` ใน WIN874) ได้ 100%
+- ✅ **Smart Order Linking (`lab_order`)**: เชื่อมโยง `lab_order` กับ `lab_head` ผ่าน `MIN(lab_order_number)` ทำให้ตารางแล็บย่อยขนาดใหญ่ (16M+ rows) ซิงค์เร็วเพียง 50ms ตามรอบ OPD
 - ✅ **Connection Retry**: auto-reconnect เมื่อ connection หลุดระหว่าง transfer
 
 ---
@@ -136,6 +137,7 @@ PostgreSQL Tables (6,400+ Tables)
 | **Basic** (มี PK) | Safe Upsert | `INSERT ON DUPLICATE KEY UPDATE` (อัปเดตเฉพาะคอลัมน์ที่มีใน PG) |
 | **Basic** (ไม่มี PK) | Truncate + Insert | ลบข้อมูลเก่าทั้งหมดแล้วโอนใหม่ |
 | **OPD** | Upsert by VN prefix | ใช้ VN prefix filter (ปี พ.ศ. YYMMDD) |
+| **OPD (lab_order)** | Upsert by min lab_order_number | หา `MIN(lab_order_number)` จาก `lab_head` ตามวันที่ย้อนหลัง (`opdDaysBack`) |
 | **IPD** (Manual) | Upsert by AN range | ใช้ AN range ที่ผู้ใช้กำหนด |
 | **IPD** (Scheduler) | Upsert by AN from an_stat | หา MIN(an) จาก `an_stat` ที่ dchdate ≥ N วัน |
 

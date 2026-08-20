@@ -2,6 +2,7 @@ import pLimit from 'p-limit';
 import postgres from '../connectors/postgres';
 import mysqlConnector from '../connectors/mysql';
 import tableClassifier from '../classifiers/tableClassifier';
+import config from '../config';
 import transferHistory from './transferHistory';
 import logger from '../utils/logger';
 import pgChangeDetector from '../utils/pgChangeDetector';
@@ -314,11 +315,15 @@ class TransferEngine {
       for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
         try {
           const t0 = Date.now();
+          const tablesConfig = config.getTablesConfig();
+          const opdDaysBack = tablesConfig.opd.opdDaysBack || 7;
+
           const result = await this.transferTable(table, { 
             type, dryRun, from, to, workerId, 
             ipdDaysBack: currentIpdDaysBack, 
             ipdMinAn: currentIpdMinAn,
-            source
+            opdDaysBack,
+            source 
           });
           
           const duration = ((Date.now() - t0) / 1000).toFixed(1);
@@ -611,9 +616,9 @@ class TransferEngine {
 
   private async transferTable(
     table: ClassifiedTable, 
-    options: { type: TransferType; dryRun: boolean; from: string | null; to: string | null; workerId: string; ipdDaysBack: number; ipdMinAn: string | null; source?: string }
+    options: { type: TransferType; dryRun: boolean; from: string | null; to: string | null; workerId: string; ipdDaysBack: number; ipdMinAn: string | null; opdDaysBack?: number; source?: string }
   ): Promise<TableTransferResult> {
-    const { type, dryRun, from, to, workerId, ipdMinAn, source } = options;
+    const { type, dryRun, from, to, workerId, ipdMinAn, opdDaysBack = 7, source } = options;
     
     // Adaptive Transfer Speed: Fast mode for initial transfer (empty MySQL table), gentle mode for incremental sync
     const mysqlRowCount = await mysqlConnector.countRows(table.name).catch(() => 0);
@@ -718,10 +723,56 @@ class TransferEngine {
         offset += batchSize;
       }
     } else if (type === 'opd') {
-      // OPD: Transfer with VN prefix filter
+      const useMinLabOrderNumber = table.config?.useMinLabOrderNumber || table.name === 'lab_order';
       const hasFilter = from && table.hasVn;
       
-      if (hasFilter) {
+      if (useMinLabOrderNumber) {
+        let filterDesc = '';
+        const daysBack = table.config?.daysBack || opdDaysBack || 7;
+
+        if (from) {
+          filterDesc = (from && to && from !== to) 
+            ? `vn BETWEEN '${from}' AND '${to}'`
+            : `vn LIKE '${from}%'`;
+          totalRows = await postgres.countLabOrderRowsByVnPrefix(table.name, from, to || undefined);
+        } else {
+          filterDesc = `ย้อนหลัง ${daysBack} วัน`;
+          totalRows = await postgres.countLabOrderRowsByDaysBack(table.name, daysBack);
+        }
+
+        workerStatuses[workerId].totalRecords = totalRows;
+        workerStatuses[workerId].currentRecords = 0;
+        addLog(`พบ ${totalRows.toLocaleString()} records (${filterDesc})`);
+
+        if (totalRows === 0) {
+          addLog(`ไม่มีข้อมูลที่ตรงเงื่อนไข`);
+        } else {
+          let offset = 0;
+          const keyColumns = await postgres.getPrimaryKey(table.name);
+
+          while (offset < totalRows) {
+            const rows = from 
+              ? await postgres.fetchLabOrderDataByVnPrefix(table.name, from, to || undefined, batchSize, offset)
+              : await postgres.fetchLabOrderDataByDaysBack(table.name, daysBack, batchSize, offset);
+            if (rows.length === 0) break;
+
+            if (!dryRun) {
+              if (keyColumns.length > 0) {
+                await mysqlConnector.upsertBatch(table.name, rows, keyColumns);
+              } else {
+                await mysqlConnector.insertBatch(table.name, rows);
+              }
+              if (currentThrottleMs > 0) await delay(currentThrottleMs);
+            }
+
+            transferredRows += rows.length;
+            workerStatuses[workerId].currentRecords = transferredRows;
+            addLog(`${table.name}: ${transferredRows.toLocaleString()} / ${totalRows.toLocaleString()} records`, 'progress', { current: transferredRows, total: totalRows });
+
+            offset += batchSize;
+          }
+        }
+      } else if (hasFilter) {
         // Use VN prefix filter
         totalRows = await postgres.countRowsWithPrefix(table.name, 'vn', from, to || undefined);
         workerStatuses[workerId].totalRecords = totalRows;

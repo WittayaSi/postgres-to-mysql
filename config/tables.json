@@ -37,6 +37,11 @@
         "xe_*",
         "asm_*"
       ]
+    },
+    "tableConfigs": {
+      "lab_order": {
+        "useMinLabOrderNumber": true
+      }
     }
   },
   "ipd": {

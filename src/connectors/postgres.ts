@@ -34,6 +34,12 @@ class PostgresConnector {
       keepAliveInitialDelayMillis: 10000,
     });
 
+    // Auto-configure client connection settings
+    this.pool.on('connect', (client: PoolClient) => {
+      client.query("SET default_transaction_read_only = on").catch(() => {});
+      client.query("SET client_encoding = 'SQL_ASCII'").catch(() => {});
+    });
+
     // Auto-recover on pool errors (don't crash the process)
     this.pool.on('error', (err) => {
       logger.error('PostgreSQL pool error (will auto-recover)', { error: err.message });
@@ -43,10 +49,11 @@ class PostgresConnector {
     try {
       const client: PoolClient = await this.pool.connect();
       await client.query('SELECT 1');
-      // Set read-only mode to protect source database
+      // Set read-only mode and SQL_ASCII encoding to bypass WIN874 conversion errors
       await client.query('SET default_transaction_read_only = on');
+      await client.query("SET client_encoding = 'SQL_ASCII'");
       client.release();
-      logger.info('PostgreSQL connected successfully (READ-ONLY mode)');
+      logger.info('PostgreSQL connected successfully (READ-ONLY, SQL_ASCII mode)');
       
       // Start periodic health check (every 5 minutes)
       this.startHealthCheck();
@@ -369,6 +376,71 @@ class PostgresConnector {
       logger.error(`Failed to get AN range from an_stat`, { error: err.message });
       return { minAn: null, maxAn: null };
     }
+  }
+
+  // Lab Order: Count exact rows matching VN prefix via lab_head
+  async countLabOrderRowsByVnPrefix(tableName: string, vnStart: string, vnEnd?: string): Promise<number> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    let query: string;
+    let params: any[];
+    if (vnStart && vnEnd && vnStart !== vnEnd) {
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2)`;
+      params = [vnStart, vnEnd + 'z'];
+    } else {
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1)`;
+      params = [vnStart + '%'];
+    }
+    const result: QueryResult = await pool.query(query, params);
+    return parseInt(result.rows[0].count);
+  }
+
+  // Lab Order: Fetch exact rows matching VN prefix via lab_head
+  async fetchLabOrderDataByVnPrefix(
+    tableName: string,
+    vnStart: string,
+    vnEnd: string | undefined,
+    limit: number = 1000,
+    offset: number = 0
+  ): Promise<Record<string, unknown>[]> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    let query: string;
+    let params: any[];
+    if (vnStart && vnEnd && vnStart !== vnEnd) {
+      query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2) ORDER BY lab_order_number LIMIT $3 OFFSET $4`;
+      params = [vnStart, vnEnd + 'z', limit, offset];
+    } else {
+      query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1) ORDER BY lab_order_number LIMIT $2 OFFSET $3`;
+      params = [vnStart + '%', limit, offset];
+    }
+    const result: QueryResult = await pool.query(query, params);
+    return result.rows;
+  }
+
+  // Lab Order: Count exact rows matching recent days via lab_head order_date
+  async countLabOrderRowsByDaysBack(tableName: string, daysBack: number): Promise<number> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeDaysBack = parseInt(String(daysBack));
+    const query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days')`;
+    const result: QueryResult = await pool.query(query);
+    return parseInt(result.rows[0].count);
+  }
+
+  // Lab Order: Fetch exact rows matching recent days via lab_head order_date
+  async fetchLabOrderDataByDaysBack(
+    tableName: string,
+    daysBack: number,
+    limit: number = 1000,
+    offset: number = 0
+  ): Promise<Record<string, unknown>[]> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeDaysBack = parseInt(String(daysBack));
+    const query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days') ORDER BY lab_order_number LIMIT $1 OFFSET $2`;
+    const result: QueryResult = await pool.query(query, [limit, offset]);
+    return result.rows;
   }
 
   // Get table modification statistics from pg_stat_user_tables & pg_statio_user_tables (Read-Only)

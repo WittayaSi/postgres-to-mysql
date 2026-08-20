@@ -61,6 +61,7 @@ export interface TableFilter {
 export interface TableSpecificConfig {
   daysBack?: number;
   skipOrphanCleanup?: boolean; // ไม่ลบ orphan rows (แถวที่มีใน MySQL แต่ไม่มีใน PostgreSQL)
+  useMinLabOrderNumber?: boolean; // ใช้ min lab_order_number จาก lab_head ตามจำนวนวันย้อนหลัง
 }
 
 export interface TableTypeConfig {

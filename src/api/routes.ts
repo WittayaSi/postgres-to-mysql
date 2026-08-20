@@ -259,9 +259,16 @@ router.post('/tables/check-counts', async (req: Request, res: Response) => {
     for (const table of tablesData) {
       let rowCount = 0;
       try {
-        if (type === 'opd' && vnStart && table.hasVn) {
-          // Count with VN prefix filter
-          rowCount = await postgresConnector.countRowsWithPrefix(table.name, 'vn', vnStart, vnEnd);
+        if (type === 'opd' && vnStart) {
+          if (table.hasVn) {
+            // Count with VN prefix filter
+            rowCount = await postgresConnector.countRowsWithPrefix(table.name, 'vn', vnStart, vnEnd);
+          } else if (table.config?.useMinLabOrderNumber || table.name === 'lab_order') {
+            // Count exact lab_order rows via lab_head VN lookup
+            rowCount = await postgresConnector.countLabOrderRowsByVnPrefix(table.name, vnStart, vnEnd);
+          } else {
+            rowCount = await postgresConnector.countRows(table.name);
+          }
         } else if (type === 'ipd' && anStart && table.hasAn) {
           // Count with AN prefix filter
           rowCount = await postgresConnector.countRowsWithPrefix(table.name, 'an', anStart, anEnd);

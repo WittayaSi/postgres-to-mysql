@@ -378,24 +378,24 @@ class PostgresConnector {
     }
   }
 
-  // Lab Order: Count exact rows matching VN prefix via lab_head
+  // Lab Order: Count exact rows matching VN prefix via lab_head (only positive lab_order_number)
   async countLabOrderRowsByVnPrefix(tableName: string, vnStart: string, vnEnd?: string): Promise<number> {
     const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     let query: string;
     let params: any[];
     if (vnStart && vnEnd && vnStart !== vnEnd) {
-      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2)`;
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2)`;
       params = [vnStart, vnEnd + 'z'];
     } else {
-      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1)`;
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1)`;
       params = [vnStart + '%'];
     }
     const result: QueryResult = await pool.query(query, params);
     return parseInt(result.rows[0].count);
   }
 
-  // Lab Order: Fetch exact rows matching VN prefix via lab_head
+  // Lab Order: Fetch exact rows matching VN prefix via lab_head (only positive lab_order_number)
   async fetchLabOrderDataByVnPrefix(
     tableName: string,
     vnStart: string,
@@ -408,27 +408,27 @@ class PostgresConnector {
     let query: string;
     let params: any[];
     if (vnStart && vnEnd && vnStart !== vnEnd) {
-      query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2) ORDER BY lab_order_number LIMIT $3 OFFSET $4`;
+      query = `SELECT * FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) >= $1 AND CAST(vn AS TEXT) < $2) ORDER BY lab_order_number LIMIT $3 OFFSET $4`;
       params = [vnStart, vnEnd + 'z', limit, offset];
     } else {
-      query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1) ORDER BY lab_order_number LIMIT $2 OFFSET $3`;
+      query = `SELECT * FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1) ORDER BY lab_order_number LIMIT $2 OFFSET $3`;
       params = [vnStart + '%', limit, offset];
     }
     const result: QueryResult = await pool.query(query, params);
     return result.rows;
   }
 
-  // Lab Order: Count exact rows matching recent days via lab_head order_date
+  // Lab Order: Count exact rows matching recent days via lab_head order_date (only positive lab_order_number)
   async countLabOrderRowsByDaysBack(tableName: string, daysBack: number): Promise<number> {
     const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const safeDaysBack = parseInt(String(daysBack));
-    const query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days')`;
+    const query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days')`;
     const result: QueryResult = await pool.query(query);
     return parseInt(result.rows[0].count);
   }
 
-  // Lab Order: Fetch exact rows matching recent days via lab_head order_date
+  // Lab Order: Fetch exact rows matching recent days via lab_head order_date (only positive lab_order_number)
   async fetchLabOrderDataByDaysBack(
     tableName: string,
     daysBack: number,
@@ -438,7 +438,7 @@ class PostgresConnector {
     const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const safeDaysBack = parseInt(String(daysBack));
-    const query = `SELECT * FROM ${safeTable} WHERE lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days') ORDER BY lab_order_number LIMIT $1 OFFSET $2`;
+    const query = `SELECT * FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days') ORDER BY lab_order_number LIMIT $1 OFFSET $2`;
     const result: QueryResult = await pool.query(query, [limit, offset]);
     return result.rows;
   }

@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/output.css">
+  <link rel="stylesheet" href="/css/styles.css">
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
@@ -82,7 +83,8 @@
         <div class="mb-2 px-2">
           <div style="position: relative;">
             <i data-lucide="search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: #94a3b8;"></i>
-            <input type="text" id="table-search" class="input" style="padding-left: 2.5rem;" placeholder="ค้นหาตาราง... (พิมพ์ชื่อตาราง)" oninput="filterTables(this.value)">
+            <input type="text" id="table-search" class="input" style="padding-left: 2.5rem; padding-right: 2rem;" placeholder="ค้นหาตาราง... (พิมพ์ชื่อตาราง)" oninput="filterTables(this.value)">
+            <button id="btn-clear-search" class="hidden" onclick="clearTableSearch()" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 14px; padding: 2px 6px;">✕</button>
           </div>
         </div>
 
@@ -201,11 +203,13 @@
     <footer class="footer flex items-center gap-3">
       <div id="master-sync-container" class="master-sync-box enabled">
         <span class="master-sync-dot"></span>
-        <span class="text-xs font-semibold">ระบบ Sync อัตโนมัติ:</span>
-        <label class="relative inline-flex items-center cursor-pointer ml-1">
-          <input type="checkbox" id="master-sync-toggle" class="sr-only peer" checked>
-          <div class="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
-          <span id="master-sync-label" class="ml-2 text-xs font-bold">เปิดทำงาน (ACTIVE)</span>
+        <span style="font-weight: 600; font-size: 0.8rem;">ระบบ Sync อัตโนมัติ:</span>
+        <label style="position: relative; display: inline-flex; align-items: center; cursor: pointer; margin-left: 0.25rem;">
+          <input type="checkbox" id="master-sync-toggle" style="position: absolute; opacity: 0; width: 0; height: 0;" checked>
+          <div class="toggle-bg" style="width: 36px; height: 20px; background-color: #10b981; border-radius: 9999px; position: relative; transition: background-color 0.25s ease;">
+            <div class="toggle-knob" style="width: 16px; height: 16px; background-color: #ffffff; border-radius: 50%; position: absolute; top: 2px; left: 2px; transform: translateX(16px); transition: transform 0.25s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.25);"></div>
+          </div>
+          <span id="master-sync-label" style="margin-left: 0.4rem; font-size: 0.8rem; font-weight: 700;">เปิดทำงาน (ACTIVE)</span>
         </label>
       </div>
       <span id="scheduler-basic-status" class="sched-badge">Basic: --</span>

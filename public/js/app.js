@@ -1112,37 +1112,63 @@ function renderTableList() {
 }
 
 // Search/Filter tables by name
+// Search/Filter tables by name
 let searchQuery = '';
-let filterRafId = null;
+let filterTimeoutId = null;
 
 function filterTables(query) {
-  // Use requestAnimationFrame to let input update first
-  if (filterRafId) cancelAnimationFrame(filterRafId);
-  filterRafId = requestAnimationFrame(() => {
+  const clearBtn = document.getElementById('btn-clear-search');
+  if (clearBtn) {
+    if (query && query.trim()) {
+      clearBtn.classList.remove('hidden');
+    } else {
+      clearBtn.classList.add('hidden');
+    }
+  }
+
+  // Use 150ms debounce to prevent UI lag while typing
+  if (filterTimeoutId) clearTimeout(filterTimeoutId);
+  filterTimeoutId = setTimeout(() => {
     doFilterTables(query);
-  });
+  }, 150);
+}
+
+function clearTableSearch() {
+  const searchInput = document.getElementById('table-search');
+  const clearBtn = document.getElementById('btn-clear-search');
+  if (searchInput) {
+    searchInput.value = '';
+    if (clearBtn) clearBtn.classList.add('hidden');
+    doFilterTables('');
+    searchInput.focus();
+  }
 }
 
 function doFilterTables(query) {
-  searchQuery = query.toLowerCase().trim();
+  searchQuery = (query || '').toLowerCase().trim();
   
   const tableData = tables[currentType] || [];
   const filteredData = searchQuery 
     ? tableData.filter(t => t.name.toLowerCase().includes(searchQuery))
     : tableData;
   
+  // Cap max displayed rows when searching to prevent DOM rendering lag
+  const MAX_DISPLAY = 300;
+  const isLimited = filteredData.length > MAX_DISPLAY;
+  const displayData = isLimited ? filteredData.slice(0, MAX_DISPLAY) : filteredData;
+
   elements.tableCount.textContent = searchQuery 
-    ? `${filteredData.length} / ${tableData.length} ตาราง`
-    : `${tableData.length} ตาราง`;
+    ? `${filteredData.length.toLocaleString()} / ${tableData.length.toLocaleString()} ตาราง${isLimited ? ` (แสดง ${MAX_DISPLAY} รายการ)` : ''}`
+    : `${tableData.length.toLocaleString()} ตาราง`;
   
   if (filteredData.length === 0) {
     elements.tableList.innerHTML = searchQuery
-      ? `<p class="text-center py-8 text-slate-400">ไม่พบตาราง "${searchQuery}"</p>`
+      ? `<p class="text-center py-8 text-slate-400">ไม่พบตาราง "${escapeHtml(searchQuery)}"</p>`
       : '<p class="text-center py-8 text-slate-400">No tables found</p>';
     return;
   }
   
-  let html = filteredData.map((table, index) => {
+  let html = displayData.map((table, index) => {
     let status = tableStatuses[table.name] || '-';
     const isChecked = status === 'รอโอน' || status === 'กำลังโอน' || status === 'โอนสำเร็จ';
     
@@ -1152,14 +1178,14 @@ function doFilterTables(query) {
     else if (status === 'ไม่สำเร็จ') statusClass = 'text-red-600';
     else if (status === 'รอโอน') statusClass = 'text-blue-600';
     
-    // Simple highlight without regex
-    let displayName = table.name;
+    // Highlight matching query text
+    let displayName = escapeHtml(table.name);
     if (searchQuery) {
       const idx = table.name.toLowerCase().indexOf(searchQuery);
       if (idx >= 0) {
-        displayName = table.name.substring(0, idx) + 
-          '<mark class="bg-yellow-200">' + table.name.substring(idx, idx + searchQuery.length) + '</mark>' + 
-          table.name.substring(idx + searchQuery.length);
+        displayName = escapeHtml(table.name.substring(0, idx)) + 
+          '<mark class="bg-yellow-200 font-semibold text-slate-900 rounded-sm px-0.5">' + escapeHtml(table.name.substring(idx, idx + searchQuery.length)) + '</mark>' + 
+          escapeHtml(table.name.substring(idx + searchQuery.length));
       }
     }
     
@@ -1172,6 +1198,10 @@ function doFilterTables(query) {
     </div>`;
   }).join('');
   
+  if (isLimited) {
+    html += `<div class="p-2 text-center text-xs text-slate-500 bg-slate-50 border-t">แสดง ${MAX_DISPLAY} ตารางแรกจาก ${filteredData.length.toLocaleString()} ตารางที่พบ (พิมพ์ระบุชื่อตารางเพิ่มเติมเพื่อเจาะจงผลลัพธ์)</div>`;
+  }
+
   elements.tableList.innerHTML = html;
 }
 
@@ -1542,12 +1572,17 @@ function renderSchedulerStatus(data) {
 
   if (masterSyncContainer) {
     masterSyncContainer.className = `master-sync-box ${anyEnabled ? 'enabled' : 'disabled'}`;
+    const toggleBg = masterSyncContainer.querySelector('.toggle-bg');
+    const toggleKnob = masterSyncContainer.querySelector('.toggle-knob');
+    if (toggleBg) toggleBg.style.backgroundColor = anyEnabled ? '#10b981' : '#f43f5e';
+    if (toggleKnob) toggleKnob.style.transform = anyEnabled ? 'translateX(16px)' : 'translateX(0px)';
   }
   if (masterSyncToggle) {
     masterSyncToggle.checked = !!anyEnabled;
   }
   if (masterSyncLabel) {
     masterSyncLabel.textContent = anyEnabled ? 'เปิดทำงาน (ACTIVE)' : 'ปิดการทำงาน (PAUSED)';
+    masterSyncLabel.style.color = anyEnabled ? '#047857' : '#dc2626';
   }
 }
 
@@ -1556,6 +1591,22 @@ const masterSyncToggle = document.getElementById('master-sync-toggle');
 if (masterSyncToggle) {
   masterSyncToggle.addEventListener('change', async () => {
     const isEnabled = masterSyncToggle.checked;
+    
+    // Animate UI toggle immediately for responsiveness
+    const container = document.getElementById('master-sync-container');
+    if (container) {
+      container.className = `master-sync-box ${isEnabled ? 'enabled' : 'disabled'}`;
+      const toggleBg = container.querySelector('.toggle-bg');
+      const toggleKnob = container.querySelector('.toggle-knob');
+      if (toggleBg) toggleBg.style.backgroundColor = isEnabled ? '#10b981' : '#f43f5e';
+      if (toggleKnob) toggleKnob.style.transform = isEnabled ? 'translateX(16px)' : 'translateX(0px)';
+    }
+    const label = document.getElementById('master-sync-label');
+    if (label) {
+      label.textContent = isEnabled ? 'เปิดทำงาน (ACTIVE)' : 'ปิดการทำงาน (PAUSED)';
+      label.style.color = isEnabled ? '#047857' : '#dc2626';
+    }
+
     try {
       const res = await fetch('/api/config/scheduler/global-toggle', {
         method: 'POST',
@@ -1569,10 +1620,12 @@ if (masterSyncToggle) {
       } else {
         showToast('Error: ' + data.error, 'error');
         masterSyncToggle.checked = !isEnabled;
+        loadSchedulerStatus();
       }
     } catch (err) {
       showToast('Failed to toggle master sync: ' + err.message, 'error');
       masterSyncToggle.checked = !isEnabled;
+      loadSchedulerStatus();
     }
   });
 }

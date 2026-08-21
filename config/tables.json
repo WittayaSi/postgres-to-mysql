@@ -1,7 +1,7 @@
 {
   "basic": {
     "schedule": "00 02 * * *",
-    "enabled": true,
+    "enabled": false,
     "description": "ข้อมูลพื้นฐาน - ทุกวันเวลา 02:00",
     "tables": {
       "include": [
@@ -23,7 +23,7 @@
   },
   "opd": {
     "schedule": "*/25 * * * *",
-    "enabled": true,
+    "enabled": false,
     "description": "ข้อมูล OPD - ทุก 25 นาที",
     "opdDaysBack": 7,
     "tables": {
@@ -46,7 +46,7 @@
   },
   "ipd": {
     "schedule": "0 */1 * * *",
-    "enabled": true,
+    "enabled": false,
     "description": "ข้อมูล IPD - ทุก 1 ชั่วโมง",
     "ipdDaysBack": 45,
     "tables": {

@@ -170,11 +170,32 @@ class PostgresConnector {
     return uniqueResult.rows.map((row: { column_name: string }) => row.column_name);
   }
 
+  // Helper to execute query safely with automatic SQL_ASCII fallback for invalid WIN874 byte sequences (e.g. 0x90, 0x8b)
+  async safeQuery(sql: string, params: any[] = []): Promise<QueryResult> {
+    const pool = await this.connect();
+    const client = await pool.connect();
+    try {
+      return await client.query(sql, params);
+    } catch (err) {
+      const errorMsg = (err as Error).message || '';
+      const errorCode = (err as any).code;
+      if (errorMsg.includes('has no equivalent in encoding') || errorCode === '22021') {
+        logger.warn(`[PG-ENCODING-FALLBACK] Invalid byte sequence in query, switching to SQL_ASCII session fallback: ${errorMsg}`);
+        await client.query("SET client_encoding = 'SQL_ASCII'");
+        const res = await client.query(sql, params);
+        await client.query("SET client_encoding = 'UTF8'").catch(() => {});
+        return res;
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async fetchData(tableName: string, limit: number = 1000, offset: number = 0): Promise<Record<string, unknown>[]> {
     return withRetry(async () => {
-      const pool = await this.connect();
       const safeTable = this.sanitizeIdentifier(tableName);
-      const result: QueryResult = await pool.query(
+      const result: QueryResult = await this.safeQuery(
         `SELECT * FROM ${safeTable} LIMIT $1 OFFSET $2`,
         [limit, offset]
       );
@@ -264,20 +285,19 @@ class PostgresConnector {
     limit: number = 1000, 
     offset: number = 0
   ): Promise<Record<string, unknown>[]> {
-    const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const safeColumn = this.sanitizeIdentifier(column);
     let query: string;
     if (prefixStart && prefixEnd && prefixStart !== prefixEnd) {
       // Range of prefixes
       query = `SELECT * FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) >= $1 AND CAST(${safeColumn} AS TEXT) < $2 LIMIT $3 OFFSET $4`;
-      const result: QueryResult = await pool.query(query, [prefixStart, prefixEnd + 'z', limit, offset]);
+      const result: QueryResult = await this.safeQuery(query, [prefixStart, prefixEnd + 'z', limit, offset]);
       return result.rows;
     } else {
       // Single prefix - use LIKE
       const prefix = prefixStart || prefixEnd;
       query = `SELECT * FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) LIKE $1 LIMIT $2 OFFSET $3`;
-      const result: QueryResult = await pool.query(query, [prefix + '%', limit, offset]);
+      const result: QueryResult = await this.safeQuery(query, [prefix + '%', limit, offset]);
       return result.rows;
     }
   }
@@ -326,10 +346,9 @@ class PostgresConnector {
     limit: number = 1000,
     offset: number = 0
   ): Promise<Record<string, unknown>[]> {
-    const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const query = `SELECT * FROM ${safeTable} WHERE CAST(an AS TEXT) >= $1 ORDER BY an LIMIT $2 OFFSET $3`;
-    const result: QueryResult = await pool.query(query, [minAn, limit, offset]);
+    const result: QueryResult = await this.safeQuery(query, [minAn, limit, offset]);
     return result.rows;
   }
 
@@ -403,7 +422,6 @@ class PostgresConnector {
     limit: number = 1000,
     offset: number = 0
   ): Promise<Record<string, unknown>[]> {
-    const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     let query: string;
     let params: any[];
@@ -414,7 +432,7 @@ class PostgresConnector {
       query = `SELECT * FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE CAST(vn AS TEXT) LIKE $1) ORDER BY lab_order_number LIMIT $2 OFFSET $3`;
       params = [vnStart + '%', limit, offset];
     }
-    const result: QueryResult = await pool.query(query, params);
+    const result: QueryResult = await this.safeQuery(query, params);
     return result.rows;
   }
 
@@ -435,11 +453,10 @@ class PostgresConnector {
     limit: number = 1000,
     offset: number = 0
   ): Promise<Record<string, unknown>[]> {
-    const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const safeDaysBack = parseInt(String(daysBack));
     const query = `SELECT * FROM ${safeTable} WHERE lab_order_number > 0 AND lab_order_number IN (SELECT lab_order_number FROM "lab_head" WHERE order_date >= CURRENT_DATE - INTERVAL '${safeDaysBack} days') ORDER BY lab_order_number LIMIT $1 OFFSET $2`;
-    const result: QueryResult = await pool.query(query, [limit, offset]);
+    const result: QueryResult = await this.safeQuery(query, [limit, offset]);
     return result.rows;
   }
 

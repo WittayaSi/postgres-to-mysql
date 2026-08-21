@@ -36,9 +36,12 @@ const baseLogger = winston.createLogger({
     // Console output
     new winston.transports.Console({
       format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} [${level}] ${message}`;
+        winston.format.printf(({ timestamp, level, message, ...meta }) => {
+          let msg = `${timestamp} [${level}] ${message}`;
+          if (Object.keys(meta).length > 0) {
+            msg += ` ${JSON.stringify(meta)}`;
+          }
+          return msg;
         })
       )
     }),

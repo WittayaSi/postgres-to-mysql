@@ -34,6 +34,7 @@ class TransferEngine {
   private batchSize: number;
   private throttleMs: number;
   private cleanupTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  private globalTransferLimit = pLimit(1);
   public isShuttingDown: boolean = false;
 
   constructor() {
@@ -98,7 +99,7 @@ class TransferEngine {
 
   /**
    * Schedule cleanup of heavy data from a worker status after transfer completes.
-   * Clears transferLogs and tableStatuses 10 minutes after transfer ends.
+   * Keeps summary logs so UI status is preserved, while releasing detailed table statuses to free memory.
    */
   private scheduleWorkerCleanup(workerId: string): void {
     if (this.cleanupTimers[workerId]) {
@@ -106,12 +107,15 @@ class TransferEngine {
     }
     this.cleanupTimers[workerId] = setTimeout(() => {
       if (workerStatuses[workerId] && !workerStatuses[workerId].isRunning) {
-        workerStatuses[workerId].transferLogs = [];
+        // Keep top summary logs so UI displays completion state instead of turning blank
+        if (workerStatuses[workerId].transferLogs) {
+          workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.slice(0, 5);
+        }
         workerStatuses[workerId].tableStatuses = {};
-        logger.info(`[CLEANUP] Cleared heavy data for worker: ${workerId}`);
+        logger.info(`[CLEANUP] Retained summary logs and freed detailed table statuses for worker: ${workerId}`);
       }
       delete this.cleanupTimers[workerId];
-    }, 10 * 60 * 1000); // 10 minutes
+    }, 30 * 60 * 1000); // 30 minutes
   }
 
   /**
@@ -329,12 +333,11 @@ class TransferEngine {
     const results: TableTransferResult[] = [];
     const validationResults: ValidationResult[] = [];
 
-    // Setup concurrency limit for parallel processing
-    // HARD LIMIT to 1 to prevent 100% CPU spikes on PostgreSQL during large table fetch
-    const limit = pLimit(1);
+    // Setup global concurrency limit for parallel processing across workers
+    // HARD LIMIT to 1 globally to prevent 100% CPU spikes and MySQL lock timeouts when multiple workers trigger
     let completedCount = 0;
 
-    const transferTasks = tablesToTransfer.map(table => limit(async () => {
+    const transferTasks = tablesToTransfer.map(table => this.globalTransferLimit(async () => {
       workerStatuses[workerId].currentTable = table.name;
 
       // Smart Sync Skip check

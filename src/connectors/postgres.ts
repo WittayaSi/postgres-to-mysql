@@ -38,6 +38,7 @@ class PostgresConnector {
     this.pool.on('connect', (client: PoolClient) => {
       client.query("SET default_transaction_read_only = on").catch(() => {});
       client.query("SET client_encoding = 'UTF8'").catch(() => {});
+      client.query("SET statement_timeout = '120000'").catch(() => {}); // 2-min timeout guard
     });
 
     // Auto-recover on pool errors (don't crash the process)
@@ -227,17 +228,16 @@ class PostgresConnector {
     const pool = await this.connect();
     const safeTable = this.sanitizeIdentifier(tableName);
     const safeColumn = this.sanitizeIdentifier(column);
-    // Cast column to text and use LIKE for prefix matching
     let query: string;
     if (prefixStart && prefixEnd && prefixStart !== prefixEnd) {
-      // Range of prefixes
-      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) >= $1 AND CAST(${safeColumn} AS TEXT) < $2`;
+      // Range of prefixes - direct index usage without CAST
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeColumn} >= $1 AND ${safeColumn} < $2`;
       const result: QueryResult = await pool.query(query, [prefixStart, prefixEnd + 'z']);
       return parseInt(result.rows[0].count);
     } else {
-      // Single prefix - use LIKE
+      // Single prefix - direct index usage
       const prefix = prefixStart || prefixEnd;
-      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) LIKE $1`;
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeColumn} LIKE $1`;
       const result: QueryResult = await pool.query(query, [prefix + '%']);
       return parseInt(result.rows[0].count);
     }
@@ -289,14 +289,14 @@ class PostgresConnector {
     const safeColumn = this.sanitizeIdentifier(column);
     let query: string;
     if (prefixStart && prefixEnd && prefixStart !== prefixEnd) {
-      // Range of prefixes
-      query = `SELECT * FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) >= $1 AND CAST(${safeColumn} AS TEXT) < $2 LIMIT $3 OFFSET $4`;
+      // Range of prefixes - B-Tree index accelerated pagination
+      query = `SELECT * FROM ${safeTable} WHERE ${safeColumn} >= $1 AND ${safeColumn} < $2 ORDER BY ${safeColumn} LIMIT $3 OFFSET $4`;
       const result: QueryResult = await this.safeQuery(query, [prefixStart, prefixEnd + 'z', limit, offset]);
       return result.rows;
     } else {
-      // Single prefix - use LIKE
+      // Single prefix - B-Tree index accelerated pagination
       const prefix = prefixStart || prefixEnd;
-      query = `SELECT * FROM ${safeTable} WHERE CAST(${safeColumn} AS TEXT) LIKE $1 LIMIT $2 OFFSET $3`;
+      query = `SELECT * FROM ${safeTable} WHERE ${safeColumn} LIKE $1 ORDER BY ${safeColumn} LIMIT $2 OFFSET $3`;
       const result: QueryResult = await this.safeQuery(query, [prefix + '%', limit, offset]);
       return result.rows;
     }

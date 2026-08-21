@@ -1534,6 +1534,47 @@ function renderSchedulerStatus(data) {
   document.getElementById('scheduler-basic-status').innerHTML = `Basic: ${renderBadge(data.basic)}`;
   document.getElementById('scheduler-opd-status').innerHTML = `OPD: ${renderBadge(data.opd)}`;
   document.getElementById('scheduler-ipd-status').innerHTML = `IPD: ${renderBadge(data.ipd)}`;
+
+  const masterSyncContainer = document.getElementById('master-sync-container');
+  const masterSyncToggle = document.getElementById('master-sync-toggle');
+  const masterSyncLabel = document.getElementById('master-sync-label');
+  const anyEnabled = (data.basic && data.basic.enabled) || (data.opd && data.opd.enabled) || (data.ipd && data.ipd.enabled);
+
+  if (masterSyncContainer) {
+    masterSyncContainer.className = `master-sync-box ${anyEnabled ? 'enabled' : 'disabled'}`;
+  }
+  if (masterSyncToggle) {
+    masterSyncToggle.checked = !!anyEnabled;
+  }
+  if (masterSyncLabel) {
+    masterSyncLabel.textContent = anyEnabled ? 'เปิดทำงาน (ACTIVE)' : 'ปิดการทำงาน (PAUSED)';
+  }
+}
+
+// Master Auto-Sync Switch Toggle Event Handler
+const masterSyncToggle = document.getElementById('master-sync-toggle');
+if (masterSyncToggle) {
+  masterSyncToggle.addEventListener('change', async () => {
+    const isEnabled = masterSyncToggle.checked;
+    try {
+      const res = await fetch('/api/config/scheduler/global-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: isEnabled }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(isEnabled ? 'เปิดระบบ Sync อัตโนมัติเรียบร้อยแล้ว!' : 'ปิดระบบ Sync อัตโนมัติเรียบร้อยแล้ว!', isEnabled ? 'success' : 'info');
+        loadSchedulerStatus();
+      } else {
+        showToast('Error: ' + data.error, 'error');
+        masterSyncToggle.checked = !isEnabled;
+      }
+    } catch (err) {
+      showToast('Failed to toggle master sync: ' + err.message, 'error');
+      masterSyncToggle.checked = !isEnabled;
+    }
+  });
 }
 
 // ==================== Telegram Notification Modal ====================

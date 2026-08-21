@@ -198,8 +198,16 @@
     </main>
 
     <!-- Footer -->
-    <footer class="footer">
-      <span class="text-secondary flex items-center gap-1"><i data-lucide="clock" class="w-4 h-4"></i> Scheduler:</span>
+    <footer class="footer flex items-center gap-3">
+      <div id="master-sync-container" class="master-sync-box enabled">
+        <span class="master-sync-dot"></span>
+        <span class="text-xs font-semibold">ระบบ Sync อัตโนมัติ:</span>
+        <label class="relative inline-flex items-center cursor-pointer ml-1">
+          <input type="checkbox" id="master-sync-toggle" class="sr-only peer" checked>
+          <div class="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          <span id="master-sync-label" class="ml-2 text-xs font-bold">เปิดทำงาน (ACTIVE)</span>
+        </label>
+      </div>
       <span id="scheduler-basic-status" class="sched-badge">Basic: --</span>
       <span id="scheduler-opd-status" class="sched-badge">OPD: --</span>
       <span id="scheduler-ipd-status" class="sched-badge">IPD: --</span>

@@ -89,3 +89,12 @@ const gracefulShutdown = async (signal: string) => {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Prevent unhandled promise rejections or unexpected errors from crashing the process
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at:', { promise, reason: (reason as Error)?.message || reason });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', { error: (error && error.message) || String(error), stack: error?.stack });
+});

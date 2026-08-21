@@ -567,6 +567,33 @@ router.post('/config/scheduler', async (req: Request, res: Response) => {
   }
 });
 
+// Master toggle to enable/disable ALL scheduler automatic syncs
+router.post('/config/scheduler/global-toggle', async (req: Request, res: Response) => {
+  try {
+    const { enabled } = req.body as { enabled: boolean };
+    const targetState = !!enabled;
+
+    let existingConfig: Record<string, any> = {};
+    if (fs.existsSync(schedulerConfigPath)) {
+      existingConfig = JSON.parse(fs.readFileSync(schedulerConfigPath, 'utf-8'));
+    }
+
+    if (existingConfig.basic) existingConfig.basic.enabled = targetState;
+    if (existingConfig.opd) existingConfig.opd.enabled = targetState;
+    if (existingConfig.ipd) existingConfig.ipd.enabled = targetState;
+
+    fs.writeFileSync(schedulerConfigPath, JSON.stringify(existingConfig, null, 2));
+    jobScheduler.restart();
+
+    logger.info(`Master Auto-Sync Toggled: ${targetState ? 'ENABLED (เปิดทำงาน)' : 'DISABLED (ปิดการทำงาน)'}`);
+    res.json({ success: true, enabled: targetState, message: `Auto-sync ${targetState ? 'enabled' : 'disabled'}` });
+  } catch (error) {
+    const err = error as Error;
+    logger.error('Error toggling global scheduler', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get logs
 router.get('/logs', (_req: Request, res: Response) => {
   try {

@@ -221,11 +221,14 @@ class MySQLConnector {
         try {
           await pool.query(`ALTER TABLE \`${tableName}\` ADD INDEX \`idx_an\` (\`an\`(15))`);
           logger.info(`Added index idx_an on ${tableName}(an)`);
+        } catch (e) {}
       }
     } catch (err) {
       // Ignore if index check fails
     }
   }
+
+  // Ensure table collation/character set is utf8mb4 so Thai text displays perfectly across all MySQL tools
   async ensureTableCharset(tableName: string): Promise<void> {
     try {
       const pool = await this.connect();

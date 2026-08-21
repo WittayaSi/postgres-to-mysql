@@ -118,13 +118,28 @@
 
         <!-- Progress Section -->
         <div id="progress-section" class="mt-4 pt-4 border-t hidden" style="flex-shrink: 0;">
-          <div class="flex justify-between text-sm mb-2">
-            <span class="font-medium">กำลังโอนข้อมูล:</span>
-            <span id="progress-table" class="text-muted">--</span>
+          <!-- Current Table Progress -->
+          <div class="mb-3">
+            <div class="flex justify-between items-center text-xs mb-1">
+              <span class="font-medium text-slate-700">กำลังโอนตารางปัจจุบัน: <span id="progress-table" class="text-blue-600 font-bold">--</span></span>
+              <span id="progress-percent" class="font-bold text-blue-600 text-xs px-2 py-0.5 rounded bg-blue-50 border border-blue-200">0%</span>
+            </div>
+            <div class="progress-bar" style="height: 0.75rem; background-color: #e2e8f0; border-radius: 9999px; overflow: hidden; position: relative; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
+              <div id="progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2563eb, #3b82f6); border-radius: 9999px; transition: width 0.3s ease; box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);"></div>
+            </div>
           </div>
-          <div class="progress-bar" style="height: 0.75rem;">
-            <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+
+          <!-- Overall Batch Progress -->
+          <div class="mb-2">
+            <div class="flex justify-between items-center text-xs mb-1">
+              <span class="font-medium text-slate-600">ความคืบหน้าภาพรวม (<span id="overall-tables-count" class="font-semibold text-slate-700">0/0</span> ตาราง):</span>
+              <span id="overall-percent" class="font-bold text-emerald-700 text-xs px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200">0%</span>
+            </div>
+            <div class="progress-bar" style="height: 0.5rem; background-color: #e2e8f0; border-radius: 9999px; overflow: hidden; position: relative;">
+              <div id="overall-progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #059669, #10b981); border-radius: 9999px; transition: width 0.3s ease;"></div>
+            </div>
           </div>
+
           <div class="flex justify-between text-xs text-muted mt-2">
             <span>เริ่ม: <span id="start-time">--</span></span>
             <span>สิ้นสุด: <span id="end-time">--</span></span>

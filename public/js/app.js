@@ -1262,9 +1262,35 @@ function updateSelectedCount() {
   }
 }
 
-function updateProgress(percent, tableName) {
-  elements.progressFill.style.width = `${percent}%`;
-  elements.progressTable.textContent = tableName || '--';
+function updateProgress(currentTablePercent, overallPercent, tableName, completedTables, totalTables) {
+  const safeCurrentPercent = Math.min(100, Math.max(0, Math.round(currentTablePercent || 0)));
+  const safeOverallPercent = Math.min(100, Math.max(0, Math.round(overallPercent || 0)));
+
+  // Current Table Bar (Blue)
+  if (elements.progressFill) {
+    elements.progressFill.style.width = `${safeCurrentPercent}%`;
+  }
+  if (elements.progressTable) {
+    elements.progressTable.textContent = tableName || '--';
+  }
+  const percentEl = document.getElementById('progress-percent');
+  if (percentEl) {
+    percentEl.textContent = `${safeCurrentPercent}%`;
+  }
+
+  // Overall Batch Bar (Green)
+  const overallFill = document.getElementById('overall-progress-fill');
+  if (overallFill) {
+    overallFill.style.width = `${safeOverallPercent}%`;
+  }
+  const overallPercentEl = document.getElementById('overall-percent');
+  if (overallPercentEl) {
+    overallPercentEl.textContent = `${safeOverallPercent}%`;
+  }
+  const overallCountEl = document.getElementById('overall-tables-count');
+  if (overallCountEl) {
+    overallCountEl.textContent = `${completedTables || 0}/${totalTables || 0}`;
+  }
 }
 
 function updateMyProgress() {
@@ -1276,12 +1302,25 @@ function updateMyProgress() {
     elements.progressSection.classList.remove('hidden');
     elements.btnTransfer.disabled = true;
     
-    // Update progress with record count info
+    // 1. Calculate Current Table Progress (Row Percentage - Blue Bar)
+    let currentTablePercent = 0;
+    if (myStatus.totalRecords > 0 && myStatus.currentRecords > 0) {
+      currentTablePercent = Math.min(100, (myStatus.currentRecords / myStatus.totalRecords) * 100);
+    }
+
+    // 2. Calculate Overall Batch Progress (Table Count Percentage - Green Bar)
+    const completedTables = myStatus.completedTables || 0;
+    const totalTables = Math.max(1, myStatus.totalTables || 1);
+    const tableWeight = 100 / totalTables;
+    const overallPercent = Math.min(100, Math.round((completedTables * tableWeight) + (currentTablePercent * tableWeight / 100)));
+
+    // Record count info
     const tableInfo = myStatus.currentTable || '--';
     const recordInfo = myStatus.totalRecords > 0 
       ? ` (${myStatus.currentRecords?.toLocaleString() || 0}/${myStatus.totalRecords?.toLocaleString()})` 
       : '';
-    updateProgress(myStatus.progress, tableInfo + recordInfo);
+
+    updateProgress(currentTablePercent, overallPercent, tableInfo + recordInfo, completedTables, myStatus.totalTables);
     
     // Only sync table statuses from worker when transfer is running
     if (myStatus.isRunning && myStatus.tableStatuses) {
@@ -1306,7 +1345,7 @@ function updateMyProgress() {
   } else {
     elements.btnTransfer.disabled = false;
     if (myStatus.progress >= 100) {
-      updateProgress(100, 'Complete!');
+      updateProgress(100, 100, 'Complete!', myStatus.totalTables || 1, myStatus.totalTables || 1);
       elements.endTime.textContent = formatDateTime(new Date());
       
       // Always sync final statuses when transfer is complete

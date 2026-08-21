@@ -30,6 +30,7 @@ class MySQLConnector {
     
     this.pool = mysql.createPool({
       ...config,
+      charset: 'utf8mb4',
       waitForConnections: true,
       connectionLimit: 3,  // Keep low to leave connections for other apps
       queueLimit: 0,
@@ -38,12 +39,14 @@ class MySQLConnector {
       keepAliveInitialDelay: 10000,
     });
     
-    // Test connection
+    // Test connection and set session charset
     try {
       const connection: PoolConnection = await this.pool.getConnection();
       await connection.query('SELECT 1');
+      await connection.query("SET NAMES utf8mb4");
+      await connection.query("SET CHARACTER SET utf8mb4");
       connection.release();
-      logger.info('MySQL connected successfully');
+      logger.info('MySQL connected successfully (utf8mb4 mode)');
       
       // Start periodic health check (every 5 minutes)
       this.startHealthCheck();
@@ -218,10 +221,30 @@ class MySQLConnector {
         try {
           await pool.query(`ALTER TABLE \`${tableName}\` ADD INDEX \`idx_an\` (\`an\`(15))`);
           logger.info(`Added index idx_an on ${tableName}(an)`);
-        } catch (e) {}
       }
     } catch (err) {
       // Ignore if index check fails
+    }
+  }
+  async ensureTableCharset(tableName: string): Promise<void> {
+    try {
+      const pool = await this.connect();
+      const [tableInfo] = await pool.query<RowDataPacket[]>(
+        `SELECT table_collation 
+         FROM information_schema.tables 
+         WHERE table_schema = ? AND table_name = ?`,
+        [this.config!.database, tableName]
+      );
+      
+      if (tableInfo.length > 0) {
+        const collation = (tableInfo[0].table_collation || tableInfo[0].TABLE_COLLATION || '').toLowerCase();
+        if (!collation.startsWith('utf8mb4')) {
+          await pool.query(`ALTER TABLE \`${tableName}\` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+          logger.info(`Converted table ${tableName} charset from ${collation} to utf8mb4`);
+        }
+      }
+    } catch (err) {
+      // Ignore if table alter fails
     }
   }
 
@@ -479,6 +502,8 @@ class MySQLConnector {
    */
   async beginBulkSession(): Promise<void> {
     const pool = await this.connect();
+    await pool.query('SET NAMES utf8mb4');
+    await pool.query('SET CHARACTER SET utf8mb4');
     await pool.query('SET SESSION unique_checks = 0');
     await pool.query('SET SESSION foreign_key_checks = 0');
     await pool.query('SET SESSION innodb_lock_wait_timeout = 5');

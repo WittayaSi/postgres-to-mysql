@@ -723,6 +723,7 @@ class TransferEngine {
     // Enable bulk session optimizations (session-level, won't affect other connections)
     if (!dryRun) {
       try {
+        await mysqlConnector.ensureTableCharset(table.name);
         await mysqlConnector.ensureIndexes(table.name, table.hasVn, table.hasAn);
         await mysqlConnector.beginBulkSession();
       } catch {

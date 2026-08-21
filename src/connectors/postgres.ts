@@ -37,7 +37,7 @@ class PostgresConnector {
     // Auto-configure client connection settings
     this.pool.on('connect', (client: PoolClient) => {
       client.query("SET default_transaction_read_only = on").catch(() => {});
-      client.query("SET client_encoding = 'SQL_ASCII'").catch(() => {});
+      client.query("SET client_encoding = 'UTF8'").catch(() => {});
     });
 
     // Auto-recover on pool errors (don't crash the process)
@@ -49,11 +49,11 @@ class PostgresConnector {
     try {
       const client: PoolClient = await this.pool.connect();
       await client.query('SELECT 1');
-      // Set read-only mode and SQL_ASCII encoding to bypass WIN874 conversion errors
+      // Set read-only mode and UTF8 encoding for proper Thai text support
       await client.query('SET default_transaction_read_only = on');
-      await client.query("SET client_encoding = 'SQL_ASCII'");
+      await client.query("SET client_encoding = 'UTF8'");
       client.release();
-      logger.info('PostgreSQL connected successfully (READ-ONLY, SQL_ASCII mode)');
+      logger.info('PostgreSQL connected successfully (READ-ONLY, UTF8 mode)');
       
       // Start periodic health check (every 5 minutes)
       this.startHealthCheck();

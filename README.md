@@ -8,12 +8,14 @@
 - ✅ **Manual Transfer**: Web UI สำหรับเลือกตาราง/ช่วงเวลา
 - ✅ **4-Layer Smart Classification Architecture**: จัดกลุ่มตารางอัตโนมัติ (Basic/OPD/IPD) **แบบไม่มีตารางซ้ำซ้อน (0% Overlaps)**
 - ✅ **Smart Change Detector**: เช็คการเปลี่ยนแปลงข้อมูลใน PostgreSQL ก่อนย้าย ข้ามตารางที่ไม่เปลี่ยนแปลงใน $0.0\text{s}$
-- ✅ **Adaptive Transfer Speed (ปรับความเร็วอัตโนมัติ)**: 
+- ✅ **Adaptive Transfer Speed & Dynamic Throttling (ปรับความเร็วตามช่วงเวลาอัตโนมัติ)**: 
+  - **โหมดเวลาทำการ (08:00 - 16:30 น.)**: เน้นความนุ่มนวลสูงสุดไม่กระทบแอปอื่น (`SERVICE_THROTTLE_MS = 300ms`, `SERVICE_BATCH_SIZE = 300`)
+  - **โหมดกลางคืน (22:00 - 05:00 น.)**: เร่งความเร็วโอนตารางขนาดใหญ่ (`NIGHT_THROTTLE_MS = 50ms`, `NIGHT_BATCH_SIZE = 1,000`)
+  - **โหมดนอกเวลาทำการ (ปกติ)**: ซิงค์มาตรฐาน (`TRANSFER_THROTTLE_MS = 150ms`, `BATCH_SIZE = 500`)
   - **การโอนครั้งแรก (Initial Fast Mode)**: ตารางว่างใน MySQL จะโอนด้วยความเร็วสูงพิเศษ (`Batch Size = 2,000`, `Throttle = 20ms`) เพื่อให้โอนเสร็จไวขึ้น 5-10 เท่า
-  - **การโอนรอบถัดไป (Gentle Incremental Sync)**: โอนแบบทะนุถนอมเซิร์ฟเวอร์ (`Batch Size = 500`, `Throttle = 150ms`) เพื่อไม่กระทบผู้ใช้งานโรงพยาบาล
 - ✅ **Anti-Freeze & Performance Tuning**: 
   - ยกเลิกการใช้ `_last_sync` 100% ช่วยขจัดปัญหา Full Table Scan และแก้ปัญหา MySQL ค้าง
-  - เพิ่ม **Batch Throttling (`TRANSFER_THROTTLE_MS = 150ms`)** เว้นจังหวะพัก ไม่แย่ง CPU/Disk I/O ของเซิร์ฟเวอร์
+  - เพิ่ม **Dynamic Batch Throttling** เว้นจังหวะพัก ไม่แย่ง CPU/Disk I/O ของเซิร์ฟเวอร์
   - สร้าง Index อัตโนมัติ (`idx_vn`, `idx_an`) เพื่อให้คิวรี่ช่วงเวลาได้รวดเร็ว
 - ✅ **🤖 AI Diagnostic Engine**: วิเคราะห์สาเหตุของ Error ระหว่างย้ายข้อมูลอัตโนมัติ (รองรับ Gemini API, OpenAI API และ Offline Rule Engine)
 - ✅ **Real-time Monitoring**: แสดงความคืบหน้าแบบ real-time ผ่าน Socket.io
@@ -21,8 +23,8 @@
 - ✅ **Secure Config via .env**: โหลดและบันทึกการตั้งค่าผ่านไฟล์ `.env` โดยตรง ปลอดภัย ไร้การหลุดของรหัสผ่าน
 - ✅ **Auto Schema Sync**: สร้างตารางและเพิ่มคอลัมน์อัตโนมัติใน MySQL 
 - ✅ **Incremental Transfer**: OPD ใช้ VN prefix, IPD ใช้ AN range
-- ✅ **Read-Only Source & Safe Encoding**: PostgreSQL เชื่อมต่อแบบ read-only และใช้ `SQL_ASCII` client encoding ช่วยป้องกันปัญหา Character Conversion Error (`0x8b` ใน WIN874) ได้ 100%
-- ✅ **Smart Order Linking (`lab_order`)**: เชื่อมโยง `lab_order` กับ `lab_head` ผ่าน `MIN(lab_order_number)` ทำให้ตารางแล็บย่อยขนาดใหญ่ (16M+ rows) ซิงค์เร็วเพียง 50ms ตามรอบ OPD
+- ✅ **Read-Only Source & Full Thai Character Encoding**: PostgreSQL เชื่อมต่อแบบ read-only และใช้ `UTF8` client encoding ทำให้ภาษาไทยทุกตารางแสดงผลถูกต้อง อ่านง่าย 100%
+- ✅ **Smart Order Linking (`lab_order`)**: เชื่อมโยง `lab_order` กับ `lab_head` เพื่อซิงค์ข้อมูลแล็บย่อยเฉพาะรายการบวกอย่างแม่นยำและรวดเร็วตามรอบ OPD
 - ✅ **Connection Retry**: auto-reconnect เมื่อ connection หลุดระหว่าง transfer
 
 ---

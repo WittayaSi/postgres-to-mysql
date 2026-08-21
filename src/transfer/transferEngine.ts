@@ -41,6 +41,53 @@ class TransferEngine {
     this.throttleMs = parseInt(process.env.TRANSFER_THROTTLE_MS || '150');
   }
 
+  /**
+   * Calculates dynamic batchSize and throttleMs based on time of day:
+   * - Service Hours (08:00 - 16:30): Gentle mode (Throttle: 300ms, Batch: 300)
+   * - Night Hours (22:00 - 05:00): Fast mode (Throttle: 50ms, Batch: 1000)
+   * - Off-Peak Day/Evening Hours: Standard mode (Throttle: 150ms, Batch: 500)
+   */
+  public getDynamicTransferParams(): { batchSize: number; throttleMs: number; modeName: string } {
+    const now = new Date();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+    const currentMinOfDay = hours * 60 + minutes;
+
+    // Service Hours: 08:00 (480 mins) to 16:30 (990 mins)
+    const isServiceHours = currentMinOfDay >= 8 * 60 && currentMinOfDay <= (16 * 60 + 30);
+    // Night Hours: 22:00 (1320 mins) to 05:00 (300 mins)
+    const isNightHours = currentMinOfDay >= 22 * 60 || currentMinOfDay < 5 * 60;
+
+    const baseBatchSize = parseInt(process.env.BATCH_SIZE || '500');
+    const baseThrottleMs = parseInt(process.env.TRANSFER_THROTTLE_MS || '150');
+
+    if (isServiceHours) {
+      const serviceThrottle = parseInt(process.env.SERVICE_THROTTLE_MS || '300');
+      const serviceBatch = parseInt(process.env.SERVICE_BATCH_SIZE || '300');
+      return { 
+        batchSize: serviceBatch, 
+        throttleMs: serviceThrottle, 
+        modeName: `เวลาทำการ (08:00-16:30น. - Throttle: ${serviceThrottle}ms, Batch: ${serviceBatch})` 
+      };
+    }
+
+    if (isNightHours) {
+      const nightThrottle = parseInt(process.env.NIGHT_THROTTLE_MS || '50');
+      const nightBatch = parseInt(process.env.NIGHT_BATCH_SIZE || '1000');
+      return { 
+        batchSize: nightBatch, 
+        throttleMs: nightThrottle, 
+        modeName: `กลางคืน (22:00-05:00น. - Throttle: ${nightThrottle}ms, Batch: ${nightBatch})` 
+      };
+    }
+
+    return { 
+      batchSize: baseBatchSize, 
+      throttleMs: baseThrottleMs, 
+      modeName: `นอกเวลาทำการ (Throttle: ${baseThrottleMs}ms, Batch: ${baseBatchSize})` 
+    };
+  }
+
   getWorkerStatus(workerId: string = 'default'): WorkerStatus | null {
     return workerStatuses[workerId] || null;
   }
@@ -196,7 +243,13 @@ class TransferEngine {
       transferLogs: [],
     };
 
-    logger.info(`[${workerId}] Starting ${type} transfer`, { dryRun, specificTables, from, to, smartSync });
+    const dynamicParams = this.getDynamicTransferParams();
+    logger.info(`[${workerId}] Starting ${type} transfer using ${dynamicParams.modeName}`, { dryRun, specificTables, from, to, smartSync });
+    workerStatuses[workerId].transferLogs!.unshift({
+      time: new Date().toLocaleTimeString('th-TH'),
+      type: 'info',
+      message: `⚙️ ระบบใช้ ${dynamicParams.modeName}`
+    });
 
     let transferResult: TransferResult;
 
@@ -620,12 +673,14 @@ class TransferEngine {
   ): Promise<TableTransferResult> {
     const { type, dryRun, from, to, workerId, ipdMinAn, opdDaysBack = 7, source } = options;
     
+    const dynamicParams = this.getDynamicTransferParams();
+    
     // Adaptive Transfer Speed: Fast mode for initial transfer (empty MySQL table), gentle mode for incremental sync
     const mysqlRowCount = await mysqlConnector.countRows(table.name).catch(() => 0);
     const isInitialTransfer = mysqlRowCount === 0;
     
-    const batchSize = isInitialTransfer ? Math.max(this.batchSize, 2000) : this.batchSize;
-    const currentThrottleMs = isInitialTransfer ? Math.min(this.throttleMs, 20) : this.throttleMs;
+    const batchSize = isInitialTransfer ? Math.max(dynamicParams.batchSize, 2000) : dynamicParams.batchSize;
+    const currentThrottleMs = isInitialTransfer ? Math.min(dynamicParams.throttleMs, 20) : dynamicParams.throttleMs;
     
     // Helper to add log entry
     const MAX_LOGS = 200;

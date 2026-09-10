@@ -25,6 +25,9 @@
 - ✅ **Incremental Transfer**: OPD ใช้ VN prefix, IPD ใช้ AN range
 - ✅ **Read-Only Source & Full Thai Character Encoding**: PostgreSQL เชื่อมต่อแบบ read-only และใช้ `UTF8` client encoding ทำให้ภาษาไทยทุกตารางแสดงผลถูกต้อง อ่านง่าย 100%
 - ✅ **Smart Order Linking (`lab_order`)**: เชื่อมโยง `lab_order` กับ `lab_head` เพื่อซิงค์ข้อมูลแล็บย่อยเฉพาะรายการบวกอย่างแม่นยำและรวดเร็วตามรอบ OPD
+- ✅ **IPD Detail Parent-Link FK Subquery Filtering**: เชื่อมโยงคิวรี่ตารางย่อย IPD (เช่น `ipd_doctor_order_detail`, `ipd_doctor_order_exm_detail`) ผ่าน Foreign Key ของตารางแม่ (`ipd_doctor_order`) ช่วยกรองข้อมูลตาม AN ได้แม่นยำ 100% ไม่หลุดไป Full Sync ทั้งตาราง
+- ✅ **Smart Master Table Reclassification**: จัดหมวดหมู่ตารางอ้างอิง/Master ที่ไม่มีคอลัมน์ `an` ไปไว้ในกลุ่ม `basic` อัตโนมัติ เพื่อโอนย้ายวันละ 1 ครั้งตอน 02:00 น. ลดภาระการคิวรีในรอบ IPD รายชั่วโมง
+- ✅ **Stop Transfer Control**: เพิ่มปุ่มกดหยุด/ยกเลิกการโอนย้ายข้อมูลกลางคันได้ทันทีบน Web UI (รองรับทั้งใน Action Bar และ Progress Section)
 - ✅ **Connection Retry**: auto-reconnect เมื่อ connection หลุดระหว่าง transfer
 
 ---
@@ -64,6 +67,13 @@ PORT=3030
 # Transfer Settings & Anti-Freeze Throttling
 BATCH_SIZE=500
 TRANSFER_THROTTLE_MS=150
+
+# Optional PostgreSQL Master DB Stat Reader (for Read-Replica setups)
+# PG_MASTER_HOST=192.168.1.100
+# PG_MASTER_PORT=5432
+# PG_MASTER_DATABASE=hospital_db
+# PG_MASTER_USER=postgres
+# PG_MASTER_PASSWORD=your_master_password
 
 # Optional AI Diagnostic Keys
 GEMINI_API_KEY=your_gemini_api_key
@@ -113,22 +123,23 @@ OPENAI_API_KEY=your_openai_api_key
 
 ## Table Classification Architecture
 
-ระบบใช้ **4-Layer Smart Classification Architecture** เพื่อจัดกลุ่มตารางใน HOSxP (กว่า 6,400 ตาราง) ให้เข้าสังกัดเพียง 1 กลุ่มเด็ดขาด **(0% Overlaps)**:
+ระบบใช้ **Smart Classification Architecture** เพื่อจัดกลุ่มตารางใน HOSxP (กว่า 6,400 ตาราง) เข้าสังกัดเพื่อความสมบูรณ์และยืดหยุ่นในการทำงานทั้งแบบอัตโนมัติและแบบกำหนดเอง (Manual):
 
 ```
 PostgreSQL Tables (6,400+ Tables)
   ├── Layer 1: Explicit Overrides (ระบุเฉพาะใน config/tables.json -> tableConfigs)
-  ├── Layer 2: IPD Domain Patterns (ipt%, an_%, ipd_%, ward%, bed%, %_ipd) -> IPD Group
-  ├── Layer 3: Contains Column 'vn' -> OPD Group (รวมถึง lab_head, xray_head, opitemrece)
-  ├── Layer 4: Fallback Column 'an' -> IPD Group
+  ├── Layer 2: IPD Domain & AN Tables (ipt%, an_%, ipd_%, ward%, bed%, %_ipd หรือมีคอลัมน์ 'an') -> IPD Group
+  ├── Layer 3: Contains Column 'vn' -> OPD Group (รวมถึงตารางสั่งการกลาง lab_head, xray_head, opitemrece)
   └── Default: Setup & Reference Tables -> Basic Group
 ```
+
+> 💡 **Shared Table Multi-Group Support**: ตารางสั่งการกลางที่มีทั้งคอลัมน์ `vn` และ `an` (เช่น `opitemrece`, `lab_head`, `xray_head`, `opdscreen`, `er_nursing_detail` ฯลฯ รวม 111+ ตาราง) จะถูกจัดอยู่ในทั้งกลุ่ม **OPD** และ **IPD** ทำให้สามารถเลือกกรอก AN โอนข้อมูลเฉพาะผู้ป่วยในรายคนผ่านหน้า Web UI แท็บ **IPD** ได้อย่างครบถ้วน 100% ขณะที่ในโหมดรันอัตโนมัติตามรอบ (Cron Scheduler) ระบบจะรันผ่านกลุ่ม OPD ย้อนหลังโดยไม่มีการสั่งซ้ำซ้อน
 
 | กลุ่ม | รายละเอียดการทำงาน | ตัวอย่างตาราง |
 |-------|---------------------|---------------|
 | **Basic** | ตารางพื้นฐาน/ตั้งค่าที่ไม่มีคอลัมน์ `vn` หรือ `an` (ซิงค์แบบ Smart Sync วันละ 1 ครั้ง ตี 2) | `patient`, `doctor`, `sys_var`, `drugitems` |
 | **OPD** | ตารางที่มีคอลัมน์ `vn` รวมถึงตารางสั่งการกลาง (ซิงค์ทุก 25 นาที ย้อนหลัง 7 วัน) | `ovst`, `opdscreen`, `lab_head`, `xray_head`, `opitemrece` |
-| **IPD** | ตารางผู้ป่วยในโดยเฉพาะ (ซิงค์ทุก 1 ชั่วโมง ย้อนหลัง 45 วัน) | `ipt`, `iptdiag`, `an_stat`, `iptadm`, `ipd_doctor_order` |
+| **IPD** | ตารางผู้ป่วยในโดยเฉพาะและตารางสั่งการกลางที่มีคอลัมน์ `an` (ซิงค์ทุก 1 ชั่วโมง ย้อนหลัง 45 วัน) | `ipt`, `iptdiag`, `an_stat`, `ipd_doctor_order`, `opitemrece`, `lab_head` |
 
 ---
 

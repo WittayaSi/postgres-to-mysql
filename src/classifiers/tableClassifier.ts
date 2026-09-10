@@ -55,26 +55,34 @@ class TableClassifier {
       const isExplicitOpd = tablesConfig.opd.tableConfigs?.[tableName] !== undefined;
       const isExplicitBasic = tablesConfig.basic.tableConfigs?.[tableName] !== undefined;
 
-      // Layer 2: IPD Domain Patterns (ipt, an_, ipd_, ward_, bed_, or hasAn without hasVn)
+      // Layer 2: IPD Domain Patterns (ipt, an_, ipd_, ward_, bed_, or hasAn)
       const isIpdPattern = nameLower.startsWith('ipt') || 
                            nameLower.startsWith('an_') || 
                            nameLower.startsWith('ipd_') || 
                            nameLower.startsWith('ward_') || 
                            nameLower.startsWith('bed_') ||
                            nameLower.includes('_ipd') || 
-                           (hasAn && !hasVn);
+                           hasAn;
 
-      if (isExplicitIpd || (isIpdPattern && !isExplicitOpd && !isExplicitBasic && this.shouldInclude(tableName, tablesConfig.ipd.tables))) {
-        // IPD Group
+      // Known IPD transactional FK columns
+      const ipdFkCols = ['ipd_doctor_order_id', 'ipd_doctor_order_detail_id', 'ipt_id', 'ipt_admit_id', 'an_stat_id'];
+      const hasIpdFk = ipdFkCols.some(col => columnNames.includes(col));
+
+      const isIpdMember = isExplicitIpd || (isIpdPattern && (hasAn || hasIpdFk || isExplicitIpd)) || hasAn || hasIpdFk;
+      const isOpdMember = isExplicitOpd || hasVn;
+
+      if (isIpdMember && !isExplicitBasic && !isExplicitOpd && this.shouldInclude(tableName, tablesConfig.ipd.tables)) {
+        // IPD Transactional Group (has AN or IPD Foreign Key)
         result.ipd.push({ ...tableEntry, config: tablesConfig.ipd.tableConfigs?.[tableName] });
-      } else if (isExplicitOpd || (hasVn && !isExplicitBasic && this.shouldInclude(tableName, tablesConfig.opd.tables))) {
-        // OPD Group (includes OPD & shared order tables like lab_head, xray_head, opitemrece)
+      }
+
+      if (isOpdMember && !isExplicitBasic && !isExplicitIpd && this.shouldInclude(tableName, tablesConfig.opd.tables)) {
+        // OPD Group (has VN)
         result.opd.push({ ...tableEntry, config: tablesConfig.opd.tableConfigs?.[tableName] });
-      } else if (hasAn && !isExplicitBasic && this.shouldInclude(tableName, tablesConfig.ipd.tables)) {
-        // Fallback for any remaining tables with 'an' column -> IPD Group
-        result.ipd.push({ ...tableEntry, config: tablesConfig.ipd.tableConfigs?.[tableName] });
-      } else if (this.shouldInclude(tableName, tablesConfig.basic.tables)) {
-        // Basic Group (Setup, reference, and master tables)
+      }
+
+      if (!result.ipd.some(t => t.name === tableName) && !result.opd.some(t => t.name === tableName) && this.shouldInclude(tableName, tablesConfig.basic.tables)) {
+        // Basic Group (Setup, reference, master tables)
         result.basic.push({ ...tableEntry, config: tablesConfig.basic.tableConfigs?.[tableName] });
       }
     }

@@ -23,6 +23,8 @@ const elements = {
   pgStatus: document.getElementById('pg-status'),
   mysqlStatus: document.getElementById('mysql-status'),
   btnTransfer: document.getElementById('btn-transfer'),
+  btnStopTransfer: document.getElementById('btn-stop-transfer'),
+  btnStopProgress: document.getElementById('btn-stop-progress'),
   btnRefresh: document.getElementById('btn-refresh'),
   btnCheck: document.getElementById('btn-check'),
   btnSettings: document.getElementById('btn-settings'),
@@ -173,6 +175,12 @@ function setupEventListeners() {
       () => startTransfer()
     );
   });
+  if (elements.btnStopTransfer) {
+    elements.btnStopTransfer.addEventListener('click', stopTransfer);
+  }
+  if (elements.btnStopProgress) {
+    elements.btnStopProgress.addEventListener('click', stopTransfer);
+  }
   elements.btnRefresh.addEventListener('click', () => {
     refreshTables();
     showToast('กำลังโหลดข้อมูลตารางใหม่', 'info');
@@ -1293,6 +1301,39 @@ function updateProgress(currentTablePercent, overallPercent, tableName, complete
   }
 }
 
+async function stopTransfer() {
+  showConfirm(
+    'ยืนยันการหยุดการโอนข้อมูล',
+    'คุณต้องการยกเลิกการโอนย้ายข้อมูลที่กำลังทำงานอยู่ ใช่หรือไม่?',
+    async () => {
+      try {
+        if (elements.btnStopTransfer) {
+          elements.btnStopTransfer.disabled = true;
+          elements.btnStopTransfer.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Stopping...';
+        }
+        if (elements.btnStopProgress) {
+          elements.btnStopProgress.disabled = true;
+          elements.btnStopProgress.innerText = 'กำลังยกเลิก...';
+        }
+
+        const res = await fetch('/api/transfer/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workerId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('ส่งคำสั่งยกเลิกการโอนเรียบร้อยแล้ว', 'warning');
+        } else {
+          showToast(data.error || 'ไม่สามารถสั่งหยุดการโอนได้', 'error');
+        }
+      } catch (err) {
+        showToast('เกิดข้อผิดพลาดในการสั่งหยุดการโอน: ' + err.message, 'error');
+      }
+    }
+  );
+}
+
 function updateMyProgress() {
   const myStatus = allWorkerStatuses[workerId];
   
@@ -1301,6 +1342,16 @@ function updateMyProgress() {
   if (myStatus.isRunning) {
     elements.progressSection.classList.remove('hidden');
     elements.btnTransfer.disabled = true;
+    if (elements.btnStopTransfer) {
+      elements.btnStopTransfer.classList.remove('hidden');
+      elements.btnStopTransfer.disabled = false;
+      elements.btnStopTransfer.innerHTML = '<i data-lucide="square" class="w-4 h-4 inline-block mr-1"></i> Stop';
+    }
+    if (elements.btnStopProgress) {
+      elements.btnStopProgress.classList.remove('hidden');
+      elements.btnStopProgress.disabled = false;
+      elements.btnStopProgress.innerText = '🛑 หยุดการโอน';
+    }
     
     // 1. Calculate Current Table Progress (Row Percentage - Blue Bar)
     let currentTablePercent = 0;
@@ -1344,6 +1395,12 @@ function updateMyProgress() {
     }
   } else {
     elements.btnTransfer.disabled = false;
+    if (elements.btnStopTransfer) {
+      elements.btnStopTransfer.classList.add('hidden');
+    }
+    if (elements.btnStopProgress) {
+      elements.btnStopProgress.classList.add('hidden');
+    }
     if (myStatus.progress >= 100) {
       updateProgress(100, 100, 'Complete!', myStatus.totalTables || 1, myStatus.totalTables || 1);
       elements.endTime.textContent = formatDateTime(new Date());

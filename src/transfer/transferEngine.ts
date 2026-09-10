@@ -27,6 +27,25 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Parent FK relationships for IPD detail tables lacking direct 'an' column
+export interface ParentLinkConfig {
+  parentTable: string;
+  fkColumn: string;
+  grandparentTable?: string;
+  grandparentFkColumn?: string;
+}
+
+export const IPD_PARENT_LINKS: Record<string, ParentLinkConfig> = {
+  ipd_doctor_order_detail: { parentTable: 'ipd_doctor_order', fkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_exm_detail: { parentTable: 'ipd_doctor_order_detail', fkColumn: 'ipd_doctor_order_detail_id', grandparentTable: 'ipd_doctor_order', grandparentFkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_med_detail: { parentTable: 'ipd_doctor_order_detail', fkColumn: 'ipd_doctor_order_detail_id', grandparentTable: 'ipd_doctor_order', grandparentFkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_opr_detail: { parentTable: 'ipd_doctor_order_detail', fkColumn: 'ipd_doctor_order_detail_id', grandparentTable: 'ipd_doctor_order', grandparentFkColumn: 'ipd_doctor_order_id' },
+  ipd_do_schedule_detail: { parentTable: 'ipd_doctor_order_detail', fkColumn: 'ipd_doctor_order_detail_id', grandparentTable: 'ipd_doctor_order', grandparentFkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_line_notify: { parentTable: 'ipd_doctor_order', fkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_audit: { parentTable: 'ipd_doctor_order', fkColumn: 'ipd_doctor_order_id' },
+  ipd_doctor_order_image: { parentTable: 'ipd_doctor_order', fkColumn: 'ipd_doctor_order_id' }
+};
+
 // Worker statuses for multi-tab support
 const workerStatuses: WorkerStatuses = {};
 
@@ -177,6 +196,22 @@ class TransferEngine {
     logger.warn('TransferEngine shutdown timeout reached. Some transfers may be interrupted.');
   }
 
+  stopWorker(workerId: string = 'default'): boolean {
+    if (workerStatuses[workerId]?.isRunning) {
+      workerStatuses[workerId].isAborted = true;
+      logger.warn(`[STOP] Manual abort requested for worker: ${workerId}`);
+      if (workerStatuses[workerId].transferLogs) {
+        workerStatuses[workerId].transferLogs!.unshift({
+          time: new Date().toLocaleTimeString('th-TH'),
+          type: 'warning',
+          message: '🛑 ยกเลิกการโอนย้ายตามคำสั่งผู้ใช้'
+        });
+      }
+      return true;
+    }
+    return false;
+  }
+
   resetWorkerStatus(workerId: string = 'default'): void {
     if (this.cleanupTimers[workerId]) {
       clearTimeout(this.cleanupTimers[workerId]);
@@ -184,6 +219,7 @@ class TransferEngine {
     }
     workerStatuses[workerId] = {
       isRunning: false,
+      isAborted: false,
       type: null,
       currentTable: '',
       progress: 0,
@@ -338,6 +374,16 @@ class TransferEngine {
     let completedCount = 0;
 
     const transferTasks = tablesToTransfer.map(table => this.globalTransferLimit(async () => {
+      // Check if user requested to stop transfer
+      if (workerStatuses[workerId]?.isAborted) {
+        logger.warn(`[${workerId}] Skipping table ${table.name} because transfer was stopped by user.`);
+        workerStatuses[workerId].tableStatuses[table.name] = 'ไม่สำเร็จ';
+        completedCount++;
+        workerStatuses[workerId].completedTables = completedCount;
+        workerStatuses[workerId].progress = Math.round((completedCount / tablesToTransfer.length) * 100);
+        return;
+      }
+
       workerStatuses[workerId].currentTable = table.name;
 
       // Smart Sync Skip check
@@ -912,10 +958,7 @@ class TransferEngine {
         }
       }
     } else if (type === 'ipd') {
-      // IPD has 3 modes:
-      // 1. Manual with AN prefix range (from/to provided, ipdMinAn is null)
-      // 2. Scheduler with ipdMinAn (45-day lookback)
-      // 3. Full sync fallback
+      const parentLink = IPD_PARENT_LINKS[table.name];
       
       if (table.hasAn && from) {
         // Mode 1: Manual - use AN prefix range (like OPD uses VN prefix)
@@ -963,6 +1006,49 @@ class TransferEngine {
             offset += batchSize;
           }
         }
+      } else if (!table.hasAn && parentLink && from) {
+        // Mode 1b: Manual Detail - use parent AN subquery
+        totalRows = await postgres.countRowsByParentAn(
+          table.name, parentLink.parentTable, parentLink.fkColumn, from, to || undefined,
+          parentLink.grandparentTable, parentLink.grandparentFkColumn
+        );
+        workerStatuses[workerId].totalRecords = totalRows;
+        workerStatuses[workerId].currentRecords = 0;
+
+        const filterDesc = (from && to && from !== to) 
+          ? `an BETWEEN '${from}' AND '${to}' (ผ่าน ${parentLink.parentTable})`
+          : `an LIKE '${from}%' (ผ่าน ${parentLink.parentTable})`;
+        addLog(`พบ ${totalRows.toLocaleString()} records (${filterDesc})`);
+
+        if (totalRows === 0) {
+          addLog(`ไม่มีข้อมูลที่ตรงเงื่อนไข`);
+        } else {
+          let offset = 0;
+          const keyColumns = await postgres.getPrimaryKey(table.name);
+
+          while (offset < totalRows) {
+            const rows = await postgres.fetchDataByParentAn(
+              table.name, parentLink.parentTable, parentLink.fkColumn, from, to || undefined,
+              batchSize, offset, parentLink.grandparentTable, parentLink.grandparentFkColumn
+            );
+            if (rows.length === 0) break;
+
+            if (!dryRun) {
+              if (keyColumns.length > 0) {
+                await mysqlConnector.upsertBatch(table.name, rows, keyColumns);
+              } else {
+                await mysqlConnector.insertBatch(table.name, rows);
+              }
+              if (currentThrottleMs > 0) await delay(currentThrottleMs);
+            }
+
+            transferredRows += rows.length;
+            workerStatuses[workerId].currentRecords = transferredRows;
+            addLog(`${table.name}: ${transferredRows.toLocaleString()} / ${totalRows.toLocaleString()} records`, 'progress', { current: transferredRows, total: totalRows });
+
+            offset += batchSize;
+          }
+        }
       } else if (table.hasAn && ipdMinAn) {
         // Mode 2: Scheduler - use pre-fetched min AN from an_stat
         totalRows = await postgres.countRowsByAnRange(table.name, ipdMinAn);
@@ -992,6 +1078,43 @@ class TransferEngine {
             workerStatuses[workerId].currentRecords = transferredRows;
             addLog(`${table.name}: ${transferredRows.toLocaleString()} / ${totalRows.toLocaleString()} records`, 'progress', { current: transferredRows, total: totalRows });
             
+            offset += batchSize;
+          }
+        }
+      } else if (!table.hasAn && parentLink && ipdMinAn) {
+        // Mode 2b: Scheduler Detail - use parent min AN subquery
+        totalRows = await postgres.countRowsByParentMinAn(
+          table.name, parentLink.parentTable, parentLink.fkColumn, ipdMinAn,
+          parentLink.grandparentTable, parentLink.grandparentFkColumn
+        );
+        workerStatuses[workerId].totalRecords = totalRows;
+        workerStatuses[workerId].currentRecords = 0;
+        addLog(`${table.name}: พบ ${totalRows.toLocaleString()} records (AN >= '${ipdMinAn}' ผ่าน ${parentLink.parentTable})`);
+
+        if (totalRows > 0) {
+          let offset = 0;
+          const keyColumns = await postgres.getPrimaryKey(table.name);
+
+          while (offset < totalRows) {
+            const rows = await postgres.fetchDataByParentMinAn(
+              table.name, parentLink.parentTable, parentLink.fkColumn, ipdMinAn,
+              batchSize, offset, parentLink.grandparentTable, parentLink.grandparentFkColumn
+            );
+            if (rows.length === 0) break;
+
+            if (!dryRun) {
+              if (keyColumns.length > 0) {
+                await mysqlConnector.upsertBatch(table.name, rows, keyColumns);
+              } else {
+                await mysqlConnector.insertBatch(table.name, rows);
+              }
+              if (currentThrottleMs > 0) await delay(currentThrottleMs);
+            }
+
+            transferredRows += rows.length;
+            workerStatuses[workerId].currentRecords = transferredRows;
+            addLog(`${table.name}: ${transferredRows.toLocaleString()} / ${totalRows.toLocaleString()} records`, 'progress', { current: transferredRows, total: totalRows });
+
             offset += batchSize;
           }
         }

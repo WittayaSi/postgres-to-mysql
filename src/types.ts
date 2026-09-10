@@ -143,6 +143,7 @@ export type TableStatus = 'กำลังโอน' | 'โอนสำเร็
 
 export interface WorkerStatus {
   isRunning: boolean;
+  isAborted?: boolean;
   type: TransferType | null;
   currentTable: string | null;
   progress: number;

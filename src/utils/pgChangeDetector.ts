@@ -6,7 +6,9 @@ class PgChangeDetector {
   private lastKnownStats: Map<string, PgTableChangeStat> = new Map();
 
   /**
-   * Get current table statistics and compare with last known snapshot
+   * Get current table statistics and compare with last known snapshot.
+   * After comparison, immediately updates lastKnownStats with the fetched values
+   * to prevent Race Condition (snapshot is atomically tied to the same query result).
    * @param tableNames Optional filter for specific table names
    */
   async checkChanges(tableNames?: string[]): Promise<ChangeDetectionResult[]> {
@@ -17,7 +19,7 @@ class PgChangeDetector {
       const prev = this.lastKnownStats.get(stat.tableName);
 
       if (!prev) {
-        // First observation: set initial snapshot, mark as changed so initial sync proceeds
+        // First observation: mark as changed so initial sync proceeds
         results.push({
           tableName: stat.tableName,
           hasChanged: true,
@@ -34,7 +36,10 @@ class PgChangeDetector {
         const totalChangesDiff = stat.totalChanges - prev.totalChanges;
 
         // If statistics were reset on DB server (current < prev), treat as changed to be safe
-        const hasChanged = totalChangesDiff !== 0 || stat.totalChanges < prev.totalChanges;
+        // If tuple stats are all 0 (Read-Replica without PG_MASTER_HOST), treat as changed so incremental UPSERT runs reliably
+        const isReadReplicaWithoutMaster = stat.insertedCount === 0 && stat.updatedCount === 0 && stat.deletedCount === 0 && !process.env.PG_MASTER_HOST;
+
+        const hasChanged = isReadReplicaWithoutMaster || totalChangesDiff !== 0 || stat.totalChanges < prev.totalChanges;
 
         results.push({
           tableName: stat.tableName,
@@ -46,6 +51,10 @@ class PgChangeDetector {
           currentStats: stat,
         });
       }
+
+      // Immediately update snapshot with the same stat used for comparison
+      // This prevents Race Condition: no gap between "check" and "save snapshot"
+      this.lastKnownStats.set(stat.tableName, stat);
     }
 
     return results;
@@ -85,7 +94,8 @@ class PgChangeDetector {
   }
 
   /**
-   * Update snapshot after successful transfer/sync
+   * Update snapshot after successful transfer/sync.
+   * Fetches fresh stats from Master DB to capture any changes that occurred during transfer.
    * @param tableNames Table names to update snapshot for
    */
   async updateSnapshot(tableNames?: string[]): Promise<void> {

@@ -4,7 +4,7 @@ import path from 'path';
 import { Pool } from 'pg';
 import mysql from 'mysql2/promise';
 import tableClassifier from '../classifiers/tableClassifier';
-import transferEngine from '../transfer/transferEngine';
+import transferEngine, { IPD_PARENT_LINKS } from '../transfer/transferEngine';
 import transferHistory from '../transfer/transferHistory';
 import jobScheduler from '../scheduler/jobScheduler';
 import logger from '../utils/logger';
@@ -269,9 +269,20 @@ router.post('/tables/check-counts', async (req: Request, res: Response) => {
           } else {
             rowCount = await postgresConnector.countRows(table.name);
           }
-        } else if (type === 'ipd' && anStart && table.hasAn) {
-          // Count with AN prefix filter
-          rowCount = await postgresConnector.countRowsWithPrefix(table.name, 'an', anStart, anEnd);
+        } else if (type === 'ipd' && anStart) {
+          if (table.hasAn) {
+            // Count with AN prefix filter
+            rowCount = await postgresConnector.countRowsWithPrefix(table.name, 'an', anStart, anEnd);
+          } else if (IPD_PARENT_LINKS[table.name]) {
+            const parentLink = IPD_PARENT_LINKS[table.name];
+            rowCount = await postgresConnector.countRowsByParentAn(
+              table.name, parentLink.parentTable, parentLink.fkColumn, anStart, anEnd || undefined,
+              parentLink.grandparentTable, parentLink.grandparentFkColumn
+            );
+          } else {
+            // Count all rows
+            rowCount = await postgresConnector.countRows(table.name);
+          }
         } else {
           // Count all rows
           rowCount = await postgresConnector.countRows(table.name);
@@ -403,6 +414,23 @@ router.get('/transfer/status', (_req: Request, res: Response) => {
   } catch (error) {
     const err = error as Error;
     logger.error('API error: /transfer/status', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stop a running transfer worker
+router.post('/transfer/stop', (req: Request, res: Response) => {
+  try {
+    const { workerId = 'default' } = req.body as { workerId?: string };
+    const stopped = transferEngine.stopWorker(workerId);
+    if (stopped) {
+      res.json({ success: true, message: `ส่งคำสั่งยกเลิกการโอนย้ายสำหรับ Worker ${workerId} เรียบร้อยแล้ว` });
+    } else {
+      res.status(400).json({ error: `Worker ${workerId} ไม่ได้กำลังทำงานอยู่` });
+    }
+  } catch (error) {
+    const err = error as Error;
+    logger.error('API error: /transfer/stop', { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });

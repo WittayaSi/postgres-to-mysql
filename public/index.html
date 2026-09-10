@@ -75,6 +75,7 @@
             <div class="flex items-center gap-2 ml-auto">
               <button id="btn-check" class="btn btn-primary flex items-center gap-1" title="ตรวจสอบจำนวนข้อมูลในตารางที่เลือก"><i data-lucide="check-square" class="w-4 h-4"></i> Check</button>
               <button id="btn-transfer" class="btn btn-success flex items-center gap-1" title="เริ่มโอนข้อมูลตารางที่เลือก" disabled><i data-lucide="play" class="w-4 h-4"></i> Start</button>
+              <button id="btn-stop-transfer" class="btn btn-danger hidden flex items-center gap-1" style="background-color: #ef4444; color: white;" title="ยกเลิก/หยุดการโอนข้อมูล"><i data-lucide="square" class="w-4 h-4"></i> Stop</button>
               <button id="btn-refresh" class="btn btn-ghost flex items-center gap-1" title="โหลดรายการตารางใหม่"><i data-lucide="refresh-cw" class="w-4 h-4"></i> Refresh</button>
             </div>
           </div>
@@ -122,7 +123,10 @@
           <div class="mb-3">
             <div class="flex justify-between items-center text-xs mb-1">
               <span class="font-medium text-slate-700">กำลังโอนตารางปัจจุบัน: <span id="progress-table" class="text-blue-600 font-bold">--</span></span>
-              <span id="progress-percent" class="font-bold text-blue-600 text-xs px-2 py-0.5 rounded bg-blue-50 border border-blue-200">0%</span>
+              <div class="flex items-center gap-2">
+                <button id="btn-stop-progress" class="hidden text-xs px-2 py-0.5 rounded font-bold" style="background-color: #fef2f2; color: #dc2626; border: 1px solid #fecaca; cursor: pointer;">🛑 หยุดการโอน</button>
+                <span id="progress-percent" class="font-bold text-blue-600 text-xs px-2 py-0.5 rounded bg-blue-50 border border-blue-200">0%</span>
+              </div>
             </div>
             <div class="progress-bar" style="height: 0.75rem; background-color: #e2e8f0; border-radius: 9999px; overflow: hidden; position: relative; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
               <div id="progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2563eb, #3b82f6); border-radius: 9999px; transition: width 0.3s ease; box-shadow: 0 0 8px rgba(37, 99, 235, 0.4);"></div>

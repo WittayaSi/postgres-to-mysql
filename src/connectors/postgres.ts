@@ -460,10 +460,61 @@ class PostgresConnector {
     return result.rows;
   }
 
-  // Get table modification statistics from pg_stat_user_tables & pg_statio_user_tables (Read-Only)
+  // Master Stat pool (optional connection for querying pg_stat_user_tables from Master DB)
+  private masterPool: Pool | null = null;
+
+  private async getMasterPool(): Promise<Pool | null> {
+    const masterHost = process.env.PG_MASTER_HOST;
+    if (!masterHost) return null;
+
+    if (this.masterPool) return this.masterPool;
+
+    try {
+      const masterConfig: PostgresConfig = {
+        host: masterHost,
+        port: parseInt(process.env.PG_MASTER_PORT || process.env.PG_PORT || '5432'),
+        database: process.env.PG_MASTER_DATABASE || process.env.PG_DATABASE || 'hospital_db',
+        user: process.env.PG_MASTER_USER || process.env.PG_USER || 'postgres',
+        password: process.env.PG_MASTER_PASSWORD || process.env.PG_PASSWORD || '',
+      };
+
+      this.masterPool = new Pool({
+        ...masterConfig,
+        max: 2,
+        idleTimeoutMillis: 10000,
+        connectionTimeoutMillis: 5000,
+        keepAlive: true,
+      });
+
+      this.masterPool.on('connect', (client: PoolClient) => {
+        client.query("SET default_transaction_read_only = on").catch(() => {});
+        client.query("SET statement_timeout = '10000'").catch(() => {}); // 10s strict timeout
+      });
+
+      this.masterPool.on('error', (err) => {
+        logger.warn('[PG-MASTER-STAT] Master stat pool warning:', err.message);
+      });
+
+      logger.info(`[PG-MASTER-STAT] Initialized 100% Read-Only Master Stat connection to ${masterHost}`);
+      return this.masterPool;
+    } catch (err) {
+      logger.warn(`[PG-MASTER-STAT] Failed to connect to Master DB (${masterHost}): ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  // Get table modification statistics from pg_stat_user_tables (Read-Only)
+  // Queries Master DB if PG_MASTER_HOST is configured, otherwise fallback to Slave pool
   async getTableChangeStats(tableNames?: string[]): Promise<PgTableChangeStat[]> {
     return withRetry(async () => {
-      const pool = await this.connect();
+      let pool = await this.getMasterPool();
+      let isMaster = true;
+
+      if (!pool) {
+        pool = await this.connect();
+        isMaster = false;
+      }
+
       let query = `
         SELECT 
           s.relname AS table_name,
@@ -495,8 +546,8 @@ class PostgresConnector {
         const tupChanges = Number(row.tup_changes);
         const totalScore = Number(row.total_score);
         
-        // If tuple counters (n_tup_ins/upd/del) are active (> 0, e.g. on Master DB), use tupChanges.
-        // Otherwise (on Slave DB where tuple stats are 0), use totalScore (scan + I/O + reltuples).
+        // If tuple counters (n_tup_ins/upd/del) are active (> 0, e.g. from Master DB), use tupChanges.
+        // Otherwise (on Read-Replica without Master DB config), fallback to totalScore.
         const totalChanges = tupChanges > 0 ? tupChanges : totalScore;
 
         return {
@@ -510,10 +561,202 @@ class PostgresConnector {
     }, 'PG:getTableChangeStats');
   }
 
+  /**
+   * IPD Detail: Count rows in a child detail table by parent table AN filter.
+   * Supports 1-level parent (e.g. ipd_doctor_order_detail -> ipd_doctor_order)
+   * and 2-level parent (e.g. ipd_doctor_order_exm_detail -> ipd_doctor_order_detail -> ipd_doctor_order)
+   */
+  async countRowsByParentAn(
+    tableName: string,
+    parentTable: string,
+    fkColumn: string,
+    fromAn: string,
+    toAn?: string,
+    grandparentTable?: string,
+    grandparentFkColumn?: string
+  ): Promise<number> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeParent = this.sanitizeIdentifier(parentTable);
+    const safeFk = this.sanitizeIdentifier(fkColumn);
+    
+    let query: string;
+    let params: any[];
+
+    if (grandparentTable && grandparentFkColumn) {
+      const safeGP = this.sanitizeIdentifier(grandparentTable);
+      const safeGPFk = this.sanitizeIdentifier(grandparentFkColumn);
+
+      if (fromAn && toAn && fromAn !== toAn) {
+        query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+            SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) >= $1 AND CAST(an AS TEXT) < $2
+          )
+        )`;
+        params = [fromAn, toAn + 'z'];
+      } else {
+        query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+            SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) LIKE $1
+          )
+        )`;
+        params = [fromAn + '%'];
+      }
+    } else {
+      if (fromAn && toAn && fromAn !== toAn) {
+        query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) >= $1 AND CAST(an AS TEXT) < $2
+        )`;
+        params = [fromAn, toAn + 'z'];
+      } else {
+        query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) LIKE $1
+        )`;
+        params = [fromAn + '%'];
+      }
+    }
+
+    const result: QueryResult = await pool.query(query, params);
+    return parseInt(result.rows[0].count);
+  }
+
+  /**
+   * IPD Detail: Fetch rows in a child detail table by parent table AN filter with pagination.
+   */
+  async fetchDataByParentAn(
+    tableName: string,
+    parentTable: string,
+    fkColumn: string,
+    fromAn: string,
+    toAn: string | undefined,
+    limit: number = 1000,
+    offset: number = 0,
+    grandparentTable?: string,
+    grandparentFkColumn?: string
+  ): Promise<Record<string, unknown>[]> {
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeParent = this.sanitizeIdentifier(parentTable);
+    const safeFk = this.sanitizeIdentifier(fkColumn);
+    
+    let query: string;
+    let params: any[];
+
+    if (grandparentTable && grandparentFkColumn) {
+      const safeGP = this.sanitizeIdentifier(grandparentTable);
+      const safeGPFk = this.sanitizeIdentifier(grandparentFkColumn);
+
+      if (fromAn && toAn && fromAn !== toAn) {
+        query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+            SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) >= $1 AND CAST(an AS TEXT) < $2
+          )
+        ) ORDER BY ${safeFk} LIMIT $3 OFFSET $4`;
+        params = [fromAn, toAn + 'z', limit, offset];
+      } else {
+        query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+            SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) LIKE $1
+          )
+        ) ORDER BY ${safeFk} LIMIT $2 OFFSET $3`;
+        params = [fromAn + '%', limit, offset];
+      }
+    } else {
+      if (fromAn && toAn && fromAn !== toAn) {
+        query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) >= $1 AND CAST(an AS TEXT) < $2
+        ) ORDER BY ${safeFk} LIMIT $3 OFFSET $4`;
+        params = [fromAn, toAn + 'z', limit, offset];
+      } else {
+        query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+          SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) LIKE $1
+        ) ORDER BY ${safeFk} LIMIT $2 OFFSET $3`;
+        params = [fromAn + '%', limit, offset];
+      }
+    }
+
+    const result: QueryResult = await this.safeQuery(query, params);
+    return result.rows;
+  }
+
+  /**
+   * IPD Detail: Count rows in a child detail table by parent table min AN filter (scheduler lookback).
+   */
+  async countRowsByParentMinAn(
+    tableName: string,
+    parentTable: string,
+    fkColumn: string,
+    minAn: string,
+    grandparentTable?: string,
+    grandparentFkColumn?: string
+  ): Promise<number> {
+    const pool = await this.connect();
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeParent = this.sanitizeIdentifier(parentTable);
+    const safeFk = this.sanitizeIdentifier(fkColumn);
+    
+    let query: string;
+    if (grandparentTable && grandparentFkColumn) {
+      const safeGP = this.sanitizeIdentifier(grandparentTable);
+      const safeGPFk = this.sanitizeIdentifier(grandparentFkColumn);
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+        SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+          SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) >= $1
+        )
+      )`;
+    } else {
+      query = `SELECT COUNT(*) as count FROM ${safeTable} WHERE ${safeFk} IN (
+        SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) >= $1
+      )`;
+    }
+
+    const result: QueryResult = await pool.query(query, [minAn]);
+    return parseInt(result.rows[0].count);
+  }
+
+  /**
+   * IPD Detail: Fetch rows in a child detail table by parent table min AN filter (scheduler lookback).
+   */
+  async fetchDataByParentMinAn(
+    tableName: string,
+    parentTable: string,
+    fkColumn: string,
+    minAn: string,
+    limit: number = 1000,
+    offset: number = 0,
+    grandparentTable?: string,
+    grandparentFkColumn?: string
+  ): Promise<Record<string, unknown>[]> {
+    const safeTable = this.sanitizeIdentifier(tableName);
+    const safeParent = this.sanitizeIdentifier(parentTable);
+    const safeFk = this.sanitizeIdentifier(fkColumn);
+    
+    let query: string;
+    if (grandparentTable && grandparentFkColumn) {
+      const safeGP = this.sanitizeIdentifier(grandparentTable);
+      const safeGPFk = this.sanitizeIdentifier(grandparentFkColumn);
+      query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+        SELECT ${safeFk} FROM ${safeParent} WHERE ${safeGPFk} IN (
+          SELECT ${safeGPFk} FROM ${safeGP} WHERE CAST(an AS TEXT) >= $1
+        )
+      ) ORDER BY ${safeFk} LIMIT $2 OFFSET $3`;
+    } else {
+      query = `SELECT * FROM ${safeTable} WHERE ${safeFk} IN (
+        SELECT ${safeFk} FROM ${safeParent} WHERE CAST(an AS TEXT) >= $1
+      ) ORDER BY ${safeFk} LIMIT $2 OFFSET $3`;
+    }
+
+    const result: QueryResult = await this.safeQuery(query, [minAn, limit, offset]);
+    return result.rows;
+  }
+
   async close(): Promise<void> {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
+    }
+    if (this.masterPool) {
+      await this.masterPool.end().catch(() => {});
+      this.masterPool = null;
     }
     if (this.pool) {
       await this.pool.end();

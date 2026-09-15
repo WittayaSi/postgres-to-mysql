@@ -17,6 +17,7 @@
   - ยกเลิกการใช้ `_last_sync` 100% ช่วยขจัดปัญหา Full Table Scan และแก้ปัญหา MySQL ค้าง
   - เพิ่ม **Dynamic Batch Throttling** เว้นจังหวะพัก ไม่แย่ง CPU/Disk I/O ของเซิร์ฟเวอร์
   - สร้าง Index อัตโนมัติ (`idx_vn`, `idx_an`) เพื่อให้คิวรี่ช่วงเวลาได้รวดเร็ว
+  - **Smart Per-Table Mutex & Parallel Transfer**: รองรับการโอนย้ายตารางคนละชื่อพร้อมกันขนานกันได้สูงสุด `MAX_CONCURRENT_TRANSFERS` (ค่าเริ่มต้น 3 ตาราง) แต่หาก Job 2 ต้องการโอนย้าย **ตารางเดียวกัน** กับ Job 1 ระบบจะทำการล็อคเฉพาะตารางนั้นแล้วเข้าคิวรออัตโนมัติ ไม่ส่งผลกระทบกับตารางอื่นที่คนละชื่อ
 - ✅ **🤖 AI Diagnostic Engine**: วิเคราะห์สาเหตุของ Error ระหว่างย้ายข้อมูลอัตโนมัติ (รองรับ Gemini API, OpenAI API และ Offline Rule Engine)
 - ✅ **Real-time Monitoring**: แสดงความคืบหน้าแบบ real-time ผ่าน Socket.io
 - ✅ **Multi-tab Support**: รองรับเปิดหลาย tab ทำงานพร้อมกัน (Worker ID)
@@ -310,6 +311,7 @@ postgres-to-mysql/
 | `TZ` | `Asia/Bangkok` | Container / Server Timezone (UTC+7 Thailand) |
 | `BATCH_SIZE` | `500` | Rows fetched per batch from PostgreSQL |
 | `TRANSFER_THROTTLE_MS` | `150` | Throttle delay between batches (ms) |
+| `MAX_CONCURRENT_TRANSFERS` | `3` | Maximum concurrent table transfers allowed across system |
 | `GEMINI_API_KEY` | - | Optional Gemini API key |
 | `OPENAI_API_KEY` | - | Optional OpenAI API key |
 

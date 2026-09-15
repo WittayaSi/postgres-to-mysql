@@ -49,16 +49,69 @@ export const IPD_PARENT_LINKS: Record<string, ParentLinkConfig> = {
 // Worker statuses for multi-tab support
 const workerStatuses: WorkerStatuses = {};
 
+/**
+ * Per-table mutual exclusion lock manager.
+ * Prevents two concurrent transfers from writing to the exact same MySQL table simultaneously,
+ * while allowing different tables to be transferred in parallel up to MAX_CONCURRENT_TRANSFERS.
+ */
+class TableLockManager {
+  private activeLocks = new Map<string, string>(); // tableName -> workerId
+  private lockWaiters = new Map<string, Array<() => void>>(); // tableName -> resolve functions
+
+  isLocked(tableName: string): boolean {
+    return this.activeLocks.has(tableName);
+  }
+
+  getLockHolder(tableName: string): string | undefined {
+    return this.activeLocks.get(tableName);
+  }
+
+  async acquire(tableName: string, workerId: string): Promise<void> {
+    while (this.activeLocks.has(tableName)) {
+      const holder = this.activeLocks.get(tableName);
+      if (holder === workerId) {
+        return; // Already held by same worker
+      }
+
+      await new Promise<void>(resolve => {
+        if (!this.lockWaiters.has(tableName)) {
+          this.lockWaiters.set(tableName, []);
+        }
+        this.lockWaiters.get(tableName)!.push(resolve);
+      });
+    }
+
+    this.activeLocks.set(tableName, workerId);
+  }
+
+  release(tableName: string, workerId: string): void {
+    if (this.activeLocks.get(tableName) === workerId) {
+      this.activeLocks.delete(tableName);
+      const waiters = this.lockWaiters.get(tableName);
+      if (waiters && waiters.length > 0) {
+        const nextWaiter = waiters.shift()!;
+        if (waiters.length === 0) {
+          this.lockWaiters.delete(tableName);
+        }
+        nextWaiter(); // Wake up next waiter for this table
+      }
+    }
+  }
+}
+
 class TransferEngine {
   private batchSize: number;
   private throttleMs: number;
   private cleanupTimers: Record<string, ReturnType<typeof setTimeout>> = {};
-  private globalTransferLimit = pLimit(1);
+  private globalTransferLimit: ReturnType<typeof pLimit>;
+  private tableLocks = new TableLockManager();
   public isShuttingDown: boolean = false;
 
   constructor() {
     this.batchSize = parseInt(process.env.BATCH_SIZE || '500');
     this.throttleMs = parseInt(process.env.TRANSFER_THROTTLE_MS || '150');
+    const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_TRANSFERS || '3');
+    this.globalTransferLimit = pLimit(maxConcurrent);
   }
 
   /**
@@ -364,6 +417,18 @@ class TransferEngine {
       });
     }
 
+    // Notify if another transfer is currently active in the global queue
+    if (this.globalTransferLimit.activeCount > 0 || this.globalTransferLimit.pendingCount > 0) {
+      const active = this.globalTransferLimit.activeCount;
+      const pending = this.globalTransferLimit.pendingCount;
+      logger.info(`[${workerId}] Transfer queued behind active transfers (active: ${active}, pending: ${pending})`);
+      workerStatuses[workerId].transferLogs!.unshift({
+        time: new Date().toLocaleTimeString('th-TH'),
+        type: 'warning',
+        message: `⏳ มีการโอนย้ายอื่นกำลังทำงานอยู่ (${active} ตารางกำลังโอน, ${pending} คิวรอ) ระบบจัด ${type.toUpperCase()} เข้าคิวรอทำงานอัตโนมัติเมื่อคิวว่าง...`
+      });
+    }
+
     workerStatuses[workerId].totalTables = tablesToTransfer.length;
     workerStatuses[workerId].tableStatuses = {};
     const results: TableTransferResult[] = [];
@@ -397,164 +462,184 @@ class TransferEngine {
         return;
       }
 
-      workerStatuses[workerId].tableStatuses[table.name] = 'กำลังโอน';
-
-      // Determine table-specific IPD configurations
-      let currentIpdMinAn = globalIpdMinAn;
-      let currentIpdDaysBack = ipdDaysBack;
-
-      if (type === 'ipd' && source === 'scheduler' && table.config?.daysBack !== undefined) {
-        currentIpdDaysBack = table.config.daysBack;
-        // Fetch specific min AN for this table's defined daysBack
-        currentIpdMinAn = await postgres.getMinAnFromAnStat(currentIpdDaysBack);
-        logger.info(`[${workerId}] IPD Override: ${table.name} mapping ${currentIpdDaysBack} days - MIN(an) = ${currentIpdMinAn}`);
-      }
-      
-      // Retry logic
-      let lastError: Error | null = null;
-      let success = false;
-      
-      for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-        try {
-          const t0 = Date.now();
-          const tablesConfig = config.getTablesConfig();
-          const opdDaysBack = tablesConfig.opd.opdDaysBack || 7;
-
-          const result = await this.transferTable(table, { 
-            type, dryRun, from, to, workerId, 
-            ipdDaysBack: currentIpdDaysBack, 
-            ipdMinAn: currentIpdMinAn,
-            opdDaysBack,
-            source 
+      // Check per-table lock: If another worker is currently transferring the SAME table, wait for it!
+      if (this.tableLocks.isLocked(table.name)) {
+        const holder = this.tableLocks.getLockHolder(table.name);
+        logger.info(`[${workerId}] Table '${table.name}' is currently locked by worker '${holder}'. Waiting for table lock...`);
+        if (workerStatuses[workerId]?.transferLogs) {
+          workerStatuses[workerId].transferLogs!.unshift({
+            time: new Date().toLocaleTimeString('th-TH'),
+            type: 'warning',
+            table: table.name,
+            message: `⏳ ตาราง '${table.name}' กำลังถูกโอนย้ายโดย Worker (${holder}) กำลังรอคิวของตารางนี้...`
           });
-          
-          const duration = ((Date.now() - t0) / 1000).toFixed(1);
-          logger.info(`[${workerId}] Finished ${table.name} in ${duration}s (${result.transferredRows} rows)`);
-          
-          // --- Data Integrity Validation ---
-          if (!dryRun) {
-            try {
-              let pgCount = 0;
-              let isFiltered = false;
-              // If filtering is applied, we count exactly what we query, otherwise full table count
-              if (type === 'ipd' && from && to && table.hasAn) {
-                pgCount = await postgres.countRowsWithPrefix(table.name, 'an', from, to);
-                isFiltered = true;
-              } else if (type === 'ipd' && currentIpdMinAn && table.hasAn) {
-                pgCount = await postgres.countRowsWithPrefix(table.name, 'an', currentIpdMinAn, undefined);
-                isFiltered = true;
-              } else if (type === 'opd' && from && to && table.hasVn) {
-                pgCount = await postgres.countRowsWithPrefix(table.name, 'vn', from, to);
-                isFiltered = true;
-              } else if (type === 'opd' && from && table.hasVn) {
-                pgCount = await postgres.countRowsWithPrefix(table.name, 'vn', from, undefined);
-                isFiltered = true;
-              } else {
-                pgCount = await postgres.countRows(table.name);
-              }
-              
-              const mysqlCount = await mysqlConnector.countRows(table.name);
-              
-              // For filtered (incremental) transfers: validate transferredRows matches pgCount
-              // For full sync: compare pgCount vs mysqlCount (total table counts)
-              let isMatch: boolean;
-              if (isFiltered) {
-                // Incremental: did we transfer the expected number of rows?
-                isMatch = Math.abs(result.transferredRows - pgCount) < 10;
-              } else {
-                // Full sync: MySQL should have roughly the same as PG
-                isMatch = Math.abs(pgCount - mysqlCount) < 10;
-              }
-              
-              validationResults.push({
-                table: table.name,
-                pgCount,
-                mysqlCount,
-                isMatch
-              });
-              
-              if (!isMatch) {
-                const detail = isFiltered
-                  ? `โอน ${result.transferredRows.toLocaleString()} vs ต้นทาง ${pgCount.toLocaleString()} แถว`
-                  : `ต้นทาง ${pgCount.toLocaleString()} vs ปลายทาง ${mysqlCount.toLocaleString()} แถว`;
-                logger.warn(`[${workerId}] Validation mismatch for ${table.name}: ${detail}`);
-                if (workerStatuses[workerId]) {
-                  workerStatuses[workerId].transferLogs!.unshift({
-                    time: new Date().toLocaleTimeString('th-TH'),
-                    type: 'warning',
-                    table: table.name,
-                    message: `⚠️ ${detail}`
-                  });
+        }
+      }
+
+      await this.tableLocks.acquire(table.name, workerId);
+
+      try {
+        workerStatuses[workerId].tableStatuses[table.name] = 'กำลังโอน';
+
+        // Determine table-specific IPD configurations
+        let currentIpdMinAn = globalIpdMinAn;
+        let currentIpdDaysBack = ipdDaysBack;
+
+        if (type === 'ipd' && source === 'scheduler' && table.config?.daysBack !== undefined) {
+          currentIpdDaysBack = table.config.daysBack;
+          // Fetch specific min AN for this table's defined daysBack
+          currentIpdMinAn = await postgres.getMinAnFromAnStat(currentIpdDaysBack);
+          logger.info(`[${workerId}] IPD Override: ${table.name} mapping ${currentIpdDaysBack} days - MIN(an) = ${currentIpdMinAn}`);
+        }
+        
+        // Retry logic
+        let lastError: Error | null = null;
+        let success = false;
+        
+        for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+          try {
+            const t0 = Date.now();
+            const tablesConfig = config.getTablesConfig();
+            const opdDaysBack = tablesConfig.opd.opdDaysBack || 7;
+
+            const result = await this.transferTable(table, { 
+              type, dryRun, from, to, workerId, 
+              ipdDaysBack: currentIpdDaysBack, 
+              ipdMinAn: currentIpdMinAn,
+              opdDaysBack,
+              source 
+            });
+            
+            const duration = ((Date.now() - t0) / 1000).toFixed(1);
+            logger.info(`[${workerId}] Finished ${table.name} in ${duration}s (${result.transferredRows} rows)`);
+            
+            // --- Data Integrity Validation ---
+            if (!dryRun) {
+              try {
+                let pgCount = 0;
+                let isFiltered = false;
+                // If filtering is applied, we count exactly what we query, otherwise full table count
+                if (type === 'ipd' && from && to && table.hasAn) {
+                  pgCount = await postgres.countRowsWithPrefix(table.name, 'an', from, to);
+                  isFiltered = true;
+                } else if (type === 'ipd' && currentIpdMinAn && table.hasAn) {
+                  pgCount = await postgres.countRowsWithPrefix(table.name, 'an', currentIpdMinAn, undefined);
+                  isFiltered = true;
+                } else if (type === 'opd' && from && to && table.hasVn) {
+                  pgCount = await postgres.countRowsWithPrefix(table.name, 'vn', from, to);
+                  isFiltered = true;
+                } else if (type === 'opd' && from && table.hasVn) {
+                  pgCount = await postgres.countRowsWithPrefix(table.name, 'vn', from, undefined);
+                  isFiltered = true;
+                } else {
+                  pgCount = await postgres.countRows(table.name);
                 }
+                
+                const mysqlCount = await mysqlConnector.countRows(table.name);
+                
+                // For filtered (incremental) transfers: validate transferredRows matches pgCount
+                // For full sync: compare pgCount vs mysqlCount (total table counts)
+                let isMatch: boolean;
+                if (isFiltered) {
+                  // Incremental: did we transfer the expected number of rows?
+                  isMatch = Math.abs(result.transferredRows - pgCount) < 10;
+                } else {
+                  // Full sync: MySQL should have roughly the same as PG
+                  isMatch = Math.abs(pgCount - mysqlCount) < 10;
+                }
+                
+                validationResults.push({
+                  table: table.name,
+                  pgCount,
+                  mysqlCount,
+                  isMatch
+                });
+                
+                if (!isMatch) {
+                  const detail = isFiltered
+                    ? `โอน ${result.transferredRows.toLocaleString()} vs ต้นทาง ${pgCount.toLocaleString()} แถว`
+                    : `ต้นทาง ${pgCount.toLocaleString()} vs ปลายทาง ${mysqlCount.toLocaleString()} แถว`;
+                  logger.warn(`[${workerId}] Validation mismatch for ${table.name}: ${detail}`);
+                  if (workerStatuses[workerId]) {
+                    workerStatuses[workerId].transferLogs!.unshift({
+                      time: new Date().toLocaleTimeString('th-TH'),
+                      type: 'warning',
+                      table: table.name,
+                      message: `⚠️ ${detail}`
+                    });
+                  }
+                }
+              } catch (valErr) {
+                logger.error(`Validation error for ${table.name}:`, valErr);
               }
-            } catch (valErr) {
-              logger.error(`Validation error for ${table.name}:`, valErr);
+            }
+            // ---------------------------------
+            
+            results.push(result);
+            workerStatuses[workerId].tableStatuses[table.name] = 'โอนสำเร็จ';
+            
+            workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.filter(
+                l => !(l.type === 'progress' && l.table === table.name)
+            );
+            workerStatuses[workerId].transferLogs!.unshift({
+                time: new Date().toLocaleTimeString('th-TH'),
+                type: 'success',
+                table: table.name,
+                message: `โอนสำเร็จ ${result.transferredRows.toLocaleString()} rows (${duration}s)`
+            });
+
+            success = true;
+            break; // Stop retrying on success
+          } catch (error) {
+            lastError = error as Error;
+            logger.warn(`[${workerId}] Attempt ${attempt} failed for table ${table.name}: ${lastError.message}`);
+            
+            if (attempt <= MAX_RETRIES) {
+              const delayMs = RETRY_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
+              logger.info(`[${workerId}] Waiting ${delayMs}ms before retry...`);
+
+              workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.filter(
+                  l => !(l.type === 'progress' && l.table === table.name)
+              );
+              workerStatuses[workerId].transferLogs!.unshift({
+                  time: new Date().toLocaleTimeString('th-TH'),
+                  type: 'warning',
+                  table: table.name,
+                  message: `ล้มเหลว (ครั้งที่ ${attempt}/${MAX_RETRIES + 1}) กำลัง retry...`
+              });
+              await delay(delayMs);
             }
           }
-          // ---------------------------------
-          
-          results.push(result);
-          workerStatuses[workerId].tableStatuses[table.name] = 'โอนสำเร็จ';
+        }
+
+        if (!success) {
+          logger.error(`[${workerId}] Transfer failed for table ${table.name} after ${MAX_RETRIES + 1} attempts`, { error: lastError });
+          workerStatuses[workerId].tableStatuses[table.name] = 'ไม่สำเร็จ';
+          workerStatuses[workerId].errors.push({ table: table.name, error: lastError?.message || 'Unknown error' });
           
           workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.filter(
               l => !(l.type === 'progress' && l.table === table.name)
           );
           workerStatuses[workerId].transferLogs!.unshift({
               time: new Date().toLocaleTimeString('th-TH'),
-              type: 'success',
+              type: 'error',
               table: table.name,
-              message: `โอนสำเร็จ ${result.transferredRows.toLocaleString()} rows (${duration}s)`
+              message: `${lastError?.message || 'Unknown error'} (หลัง retry)`
           });
 
-          success = true;
-          break; // Stop retrying on success
-        } catch (error) {
-          lastError = error as Error;
-          logger.warn(`[${workerId}] Attempt ${attempt} failed for table ${table.name}: ${lastError.message}`);
-          
-          if (attempt <= MAX_RETRIES) {
-            const delayMs = RETRY_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
-            logger.info(`[${workerId}] Waiting ${delayMs}ms before retry...`);
-
-            workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.filter(
-                l => !(l.type === 'progress' && l.table === table.name)
-            );
-            workerStatuses[workerId].transferLogs!.unshift({
-                time: new Date().toLocaleTimeString('th-TH'),
-                type: 'warning',
-                table: table.name,
-                message: `ล้มเหลว (ครั้งที่ ${attempt}/${MAX_RETRIES + 1}) กำลัง retry...`
-            });
-            await delay(delayMs);
-          }
+          // Asynchronous AI Diagnosis
+          aiDiagnoser.diagnoseError(lastError?.message || 'Unknown error', table.name).then(diagnosis => {
+              logger.info(`[AI DIAGNOSIS] Table ${table.name}: ${diagnosis.errorSummary}`);
+              workerStatuses[workerId].transferLogs!.unshift({
+                  time: new Date().toLocaleTimeString('th-TH'),
+                  type: 'warning',
+                  table: table.name,
+                  message: `🤖 [AI Diagnostic] ${diagnosis.errorSummary} (แนะนำ: ${diagnosis.suggestedAction || diagnosis.recommendations[0]})`
+              });
+          }).catch(() => {});
         }
-      }
-
-      if (!success) {
-        logger.error(`[${workerId}] Transfer failed for table ${table.name} after ${MAX_RETRIES + 1} attempts`, { error: lastError });
-        workerStatuses[workerId].tableStatuses[table.name] = 'ไม่สำเร็จ';
-        workerStatuses[workerId].errors.push({ table: table.name, error: lastError?.message || 'Unknown error' });
-        
-        workerStatuses[workerId].transferLogs = workerStatuses[workerId].transferLogs!.filter(
-            l => !(l.type === 'progress' && l.table === table.name)
-        );
-        workerStatuses[workerId].transferLogs!.unshift({
-            time: new Date().toLocaleTimeString('th-TH'),
-            type: 'error',
-            table: table.name,
-            message: `${lastError?.message || 'Unknown error'} (หลัง retry)`
-        });
-
-        // Asynchronous AI Diagnosis
-        aiDiagnoser.diagnoseError(lastError?.message || 'Unknown error', table.name).then(diagnosis => {
-            logger.info(`[AI DIAGNOSIS] Table ${table.name}: ${diagnosis.errorSummary}`);
-            workerStatuses[workerId].transferLogs!.unshift({
-                time: new Date().toLocaleTimeString('th-TH'),
-                type: 'warning',
-                table: table.name,
-                message: `🤖 [AI Diagnostic] ${diagnosis.errorSummary} (แนะนำ: ${diagnosis.suggestedAction || diagnosis.recommendations[0]})`
-            });
-        }).catch(() => {});
+      } finally {
+        this.tableLocks.release(table.name, workerId);
       }
 
       completedCount++;
